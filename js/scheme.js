@@ -43,6 +43,32 @@ const Scheme = (() => {
     return e;
   }
 
+  const measureCtx = document.createElement("canvas").getContext("2d");
+
+  /* Подбор положения и кегля подписи: полюс недоступности + горизонтальный просвет,
+     чтобы текст целиком лежал внутри полигона и оставался горизонтальным. */
+  function fitLabel(text, geom, proj, { min, max, weight, allowSplit = true }) {
+    let best = null, bestA = -1;
+    for (const r of geomOuterRings(geom)) {
+      const pr = r.map(proj);
+      let a = 0;
+      for (let i = 0; i < pr.length - 1; i++) a += pr[i][0] * pr[i + 1][1] - pr[i + 1][0] * pr[i][1];
+      a = Math.abs(a);
+      if (a > bestA) { bestA = a; best = pr; }
+    }
+    const pole = poleOfInaccessibility(best);
+    const parts = allowSplit ? splitLabel(text) : [text];
+    measureCtx.font = `${weight} 100px ${App.FONT}`;
+    const wf = Math.max(...parts.map(p => measureCtx.measureText(p).width)) / 100; // ширина на 1px кегля
+    const clr = horizontalClearance(best, pole.x, pole.y);
+    const availW = clr ? (clr[1] - clr[0]) : pole.d * 2;
+    const x = clr ? (clr[0] + clr[1]) / 2 : pole.x;
+    let size = availW * 0.88 / wf;
+    size = Math.min(size, 2 * pole.d / (parts.length * 1.2)); // вертикальный габарит
+    size = Math.max(min, Math.min(max, size));
+    return { x, y: pole.y, size, parts };
+  }
+
   /* ---- построение состояния под выбранный район ---- */
   function build(d) {
     const rectL = { x: 30, y: 40, w: 640, h: 900 };
@@ -56,18 +82,22 @@ const Scheme = (() => {
     const aoBBox = ringsBBox(rayInAo.flatMap(f => geomOuterRings(f.geometry)));
     st.projR = fitProjection(aoBBox, rectR);
 
-    st.aoLabels = App.okruga.features.map(f => {
-      const name = f.properties.name;
-      const c = st.projL(featureCentroid(f));
-      return { text: AO_FULL[name] || name, x: c[0], y: c[1], size: name === d.ao ? 28 : 25, bold: true };
-    });
-    // убрать дубли по имени (округ из нескольких полигонов)
     const seen = new Set();
-    st.aoLabels = st.aoLabels.filter(l => !seen.has(l.text) && seen.add(l.text));
+    st.aoLabels = [];
+    for (const f of App.okruga.features) {
+      const name = f.properties.name;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const text = AO_FULL[name] || name;
+      const fit = fitLabel(text, f.geometry, st.projL,
+        { min: 11, max: name === d.ao ? 28 : 25, weight: 600, allowSplit: false });
+      st.aoLabels.push({ text, x: fit.x, y: fit.y, size: fit.size, parts: [text] });
+    }
 
     st.rayLabels = rayInAo.map(f => {
-      const c = st.projR(featureCentroid(f));
-      return { text: fixYo(f.properties.name), x: c[0], y: c[1], size: 18 };
+      const text = fixYo(f.properties.name);
+      const fit = fitLabel(text, f.geometry, st.projR, { min: 9, max: 19, weight: 500 });
+      return { text, x: fit.x, y: fit.y, size: fit.size, parts: fit.parts };
     });
 
     const cD = featureCentroid(d.feature);
@@ -134,14 +164,14 @@ const Scheme = (() => {
     // рамка выноски
     const gC = el("g", { class: "draggable", "data-drag": "callout" }, svg);
     el("rect", { x: boxX, y: boxY, width: c.w, height: c.h, fill: "#fff", stroke: "#1a1a1a", "stroke-width": 2 }, gC);
-    el("text", { x: c.x, y: c.y - 12, "text-anchor": "middle", "font-size": 26, "font-family": "Golos Text, Arial", fill: "#111" }, gC).textContent = line1;
-    el("text", { x: c.x, y: c.y + 26, "text-anchor": "middle", "font-size": 28, "font-weight": 700, "font-family": "Golos Text, Arial", fill: "#111" }, gC).textContent = line2;
+    el("text", { x: c.x, y: c.y - 12, "text-anchor": "middle", "font-size": 26, "font-family": App.FONT, fill: "#111" }, gC).textContent = line1;
+    el("text", { x: c.x, y: c.y + 26, "text-anchor": "middle", "font-size": 28, "font-weight": 700, "font-family": App.FONT, fill: "#111" }, gC).textContent = line2;
 
     // подписи округов
     st.aoLabels.forEach((l, i) => {
       const t = el("text", {
         x: l.x, y: l.y, "text-anchor": "middle", "font-size": l.size,
-        "font-family": "Golos Text, Arial", "font-weight": 600, fill: "#111",
+        "font-family": App.FONT, "font-weight": 600, fill: "#111",
         stroke: "#fff", "stroke-width": 5, "paint-order": "stroke",
         class: "draggable", "data-drag": "ao:" + i,
       }, svg);
@@ -152,11 +182,11 @@ const Scheme = (() => {
     st.rayLabels.forEach((l, i) => {
       const t = el("text", {
         x: l.x, y: l.y, "text-anchor": "middle", "font-size": l.size,
-        "font-family": "Golos Text, Arial", "font-weight": 500, fill: "#111",
+        "font-family": App.FONT, "font-weight": 500, fill: "#111",
         stroke: "#fff", "stroke-width": 4, "paint-order": "stroke",
         class: "draggable", "data-drag": "ray:" + i,
       }, svg);
-      const parts = splitLabel(l.text);
+      const parts = l.parts || [l.text];
       parts.forEach((p, j) => {
         const ts = el("tspan", { x: l.x, dy: j === 0 ? (parts.length > 1 ? -l.size * 0.35 : 0) : l.size * 1.1 }, t);
         ts.textContent = p;
@@ -282,9 +312,9 @@ const Scheme = (() => {
     ctx.fillStyle = "#fff"; ctx.fillRect(boxX, boxY, c.w, c.h);
     ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = 2; ctx.strokeRect(boxX, boxY, c.w, c.h);
     ctx.textAlign = "center"; ctx.fillStyle = "#111";
-    ctx.font = "26px 'Golos Text', Arial";
+    ctx.font = `26px ${App.FONT}`;
     ctx.fillText(document.getElementById("scheme-callout1").value, c.x, c.y - 12);
-    ctx.font = "700 28px 'Golos Text', Arial";
+    ctx.font = `700 28px ${App.FONT}`;
     ctx.fillText(document.getElementById("scheme-callout2").value, c.x, c.y + 26);
 
     // подписи
@@ -293,10 +323,10 @@ const Scheme = (() => {
       ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
     };
     ctx.fillStyle = "#111";
-    for (const l of st.aoLabels) { ctx.font = `600 ${l.size}px 'Golos Text', Arial`; halo(l.text, l.x, l.y); }
+    for (const l of st.aoLabels) { ctx.font = `600 ${l.size}px ${App.FONT}`; halo(l.text, l.x, l.y); }
     for (const l of st.rayLabels) {
-      ctx.font = `500 ${l.size}px 'Golos Text', Arial`;
-      const parts = splitLabel(l.text);
+      ctx.font = `500 ${l.size}px ${App.FONT}`;
+      const parts = l.parts || [l.text];
       parts.forEach((p, j) => {
         const dy = parts.length > 1 ? (j === 0 ? -l.size * 0.35 : l.size * 0.75) : 0;
         halo(p, l.x, l.y + dy);

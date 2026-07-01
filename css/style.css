@@ -2,6 +2,8 @@
   --pink-fill: #f8c9e2;
   --pink-stroke: #ec3ea0;
   --magenta: #ff00dd;
+  --frame: #c49a6c;
+  --font: "Century Gothic", "CenturyGothic", "Didact Gothic", Arial, sans-serif;
   --ui-bg: #f4f5f7;
   --ui-border: #d9dce1;
   --accent: #0f6fd6;
@@ -10,7 +12,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  font-family: "Golos Text", Arial, sans-serif;
+  font-family: var(--font);
   display: flex; flex-direction: column;
   color: #1c1e21; background: var(--ui-bg);
 }
@@ -62,6 +64,9 @@ main { flex: 1 1 auto; min-height: 0; }
 .hint { font-size: 12px; color: #777; line-height: 1.45; }
 .badges-row { display: flex; gap: 10px; font-size: 13px; flex-wrap: wrap; }
 .badges-row label { display: flex; gap: 3px; align-items: center; }
+label.check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.group select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 8px; }
+.field input[type=color] { width: 48px; height: 30px; padding: 2px; border: 1px solid var(--ui-border); border-radius: 6px; }
 
 .workspace { flex: 1 1 auto; position: relative; min-width: 0; overflow: hidden; }
 #scheme-workspace { display: flex; align-items: center; justify-content: center; padding: 12px; }
@@ -100,21 +105,13 @@ main { flex: 1 1 auto; min-height: 0; }
   text-shadow: 0 0 4px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.7), 1px 1px 3px rgba(0,0,0,.9);
 }
 .ann-callout .ann-inner {
-  background: #fff; border: 2.5px solid var(--magenta);
+  background: #fff; border: 2.5px solid var(--frame);
   padding: .45em .9em; font-weight: 600; color: #111; text-align: center; line-height: 1.35;
 }
 .ann-metro .ann-inner { text-align: center; }
 .ann-metro .m-row { display: flex; gap: .25em; align-items: center; justify-content: center; }
-.ann-metro .m-logo {
-  background: #d6083b; color: #fff; font-weight: 700; border-radius: .2em;
-  padding: 0 .3em; line-height: 1.35;
-}
-.ann-metro .m-badge { color: #fff; font-weight: 700; border-radius: .25em; padding: 0 .3em; line-height: 1.35; }
-.m-badge.bD1 { background: #f2a03d; }
-.m-badge.bD2 { background: #e84393; }
-.m-badge.bD3 { background: #e8703d; }
-.m-badge.bD4 { background: #159e8c; }
-.m-badge.bМЦК { background: #d6083b; }
+.ann-metro .m-row img { height: 1.2em; display: block; }
+.ann-metro .m-badge { color: #fff; font-weight: 700; border-radius: .25em; padding: 0 .3em; line-height: 1.35; background: #888; }
 .ann-metro .m-name {
   color: #d6083b; font-weight: 700; margin-top: .15em;
   text-shadow: 0 0 3px #fff, 0 0 3px #fff, 1px 1px 2px #fff, -1px -1px 2px #fff;

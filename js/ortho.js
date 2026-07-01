@@ -1,32 +1,100 @@
-/* Ортофотоплан: спутник Esri + маска района + территория + подписи + экспорт PNG */
+/* Ортофотоплан: спутник (Яндекс/Esri/Sentinel-2) + дороги и ЖД из OSM + маска района
+   + территория + подписи с иконками метро + экспорт PNG */
 "use strict";
 
 const Ortho = (() => {
-  const TILE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-  const ATTR = "Esri World Imagery — Esri, Maxar, Earthstar Geographics";
+  /* ================= подложки ================= */
+  const BASEMAPS = {
+    yandex: {
+      name: "Яндекс Спутник",
+      url: "https://core-sat.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}&scale=1&lang=ru_RU",
+      crs: "3395", maxNativeZoom: 19,
+      attr: "© Яндекс Спутник",
+    },
+    esri: {
+      name: "Esri World Imagery",
+      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      crs: "3857", maxNativeZoom: 19,
+      attr: "Esri World Imagery — Esri, Maxar, Earthstar Geographics",
+    },
+    s2: {
+      name: "Sentinel-2 cloudless 2024",
+      url: "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/g/{z}/{y}/{x}.jpg",
+      crs: "3857", maxNativeZoom: 14,
+      attr: "Sentinel-2 cloudless 2024 — EOX IT Services (CC BY 4.0)",
+    },
+  };
+  let curBase = "yandex";
 
-  let map = null, inited = false;
+  /* ================= оформление дорог и ЖД (базовые толщины при z16) ================= */
+  const ROAD_COLOR = "#f3ecd2";
+  const ROAD_W = {
+    motorway: 16, trunk: 16, primary: 13, secondary: 11, tertiary: 9,
+    unclassified: 6.5, residential: 6.5, living_street: 5, pedestrian: 5,
+  };
+  const RAIL = { casing: 7.5, dash: 4.5, dashLen: 18 };
+  const zf = z => Math.min(3, Math.max(0.15, Math.pow(2, z - 16)));
+
+  let map = null, baseLayer = null, inited = false;
   const st = {
     maskLayer: null, edgeLayer: null,
-    territory: null,          // {latlngs:[[lat,lng],..], layer, areaM2}
+    territory: null,          // {latlngs, layer, areaM2}
     annotations: [],          // {id,type,latlng,text,size,rot,badges,marker,leaderTo,leaderLayer}
     selected: null,
-    drawing: null,            // {pts, line, dots}
+    drawing: null,
     nextId: 1,
+    osm: null,                // {roadsByClass: {cls: [[latlng,..],..]}, rails: [[latlng,..],..], layers}
   };
+  const osmCache = {};        // districtKey -> данные Overpass
 
   /* ================= карта ================= */
+  function crsOf(id) { return BASEMAPS[id].crs === "3395" ? L.CRS.EPSG3395 : L.CRS.EPSG3857; }
+
+  function createMap(center, zoom) {
+    map = L.map("map", { center, zoom, maxZoom: 21, crs: crsOf(curBase) });
+    map.createPane("roads");
+    map.getPane("roads").style.zIndex = 350;
+    const bm = BASEMAPS[curBase];
+    baseLayer = L.tileLayer(bm.url, { maxZoom: 21, maxNativeZoom: bm.maxNativeZoom, attribution: bm.attr }).addTo(map);
+    map.on("click", onMapClick);
+    map.on("dblclick", onMapDblClick);
+    map.on("zoomend", updateOsmWeights);
+  }
+
   function ensureMap() {
     if (inited) return;
     inited = true;
-    map = L.map("map", { center: [55.75, 37.62], zoom: 11, maxZoom: 20 });
-    L.tileLayer(TILE_URL, { maxZoom: 20, maxNativeZoom: 19, attribution: ATTR }).addTo(map);
-    map.on("click", onMapClick);
-    map.on("dblclick", onMapDblClick);
+    createMap([55.75, 37.62], 11);
     if (App.district) applyDistrict(App.district);
     restore();
+    if (document.getElementById("osm-roads").checked) loadOSM();
   }
   function onShow() { ensureMap(); setTimeout(() => map.invalidateSize(), 50); }
+
+  function setBasemap(id) {
+    if (!inited) { curBase = id; return; }
+    const sameCrs = BASEMAPS[id].crs === BASEMAPS[curBase].crs;
+    curBase = id;
+    if (sameCrs) {
+      map.removeLayer(baseLayer);
+      const bm = BASEMAPS[id];
+      baseLayer = L.tileLayer(bm.url, { maxZoom: 21, maxNativeZoom: bm.maxNativeZoom, attribution: bm.attr }).addTo(map);
+    } else {
+      // другая проекция (Яндекс = EPSG:3395) — пересоздаём карту, слои переносим
+      cancelDraw();
+      const c = map.getCenter(), z = map.getZoom();
+      map.remove();
+      createMap(c, z);
+      if (App.district) applyDistrict(App.district, true);
+      addOsmLayers();
+      if (st.territory) st.territory.layer.addTo(map);
+      for (const a of st.annotations) {
+        a.marker.addTo(map);
+        if (a.leaderLayer) a.leaderLayer.addTo(map);
+      }
+    }
+    save();
+  }
 
   function applyDistrict(d, keepView) {
     if (!inited) return;
@@ -47,9 +115,109 @@ const Ortho = (() => {
     if (!inited) return;
     const saved = readSaved();
     clearAll(false);
+    removeOsmLayers();
     applyDistrict(d);
     if (saved && saved.district === d.ao + "|" + d.name) restoreState(saved);
+    if (document.getElementById("osm-roads").checked) loadOSM();
   });
+
+  /* ================= дороги и ЖД из OSM (Overpass) ================= */
+  const OVERPASS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ];
+
+  function osmStatus(msg) { document.getElementById("osm-status").textContent = msg; }
+
+  async function loadOSM() {
+    if (!App.district || !inited) return;
+    const key = App.district.ao + "|" + App.district.name;
+    removeOsmLayers();
+    if (osmCache[key]) { st.osm = osmCache[key]; addOsmLayers(); osmStatus(osmSummary()); return; }
+    osmStatus("Загрузка дорог из OSM…");
+    const rings = geomOuterRings(App.district.feature.geometry);
+    const [x0, y0, x1, y1] = ringsBBox(rings);
+    const px = (x1 - x0) * 0.15, py = (y1 - y0) * 0.15;
+    const bbox = `${(y0 - py).toFixed(5)},${(x0 - px).toFixed(5)},${(y1 + py).toFixed(5)},${(x1 + px).toFixed(5)}`;
+    const q = `[out:json][timeout:90];(
+      way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian)$"](${bbox});
+      way["railway"="rail"]["service"!~"."](${bbox});
+    );out geom;`;
+    let data = null, err = null;
+    for (const ep of OVERPASS) {
+      try {
+        const r = await fetch(ep, { method: "POST", body: "data=" + encodeURIComponent(q) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        data = await r.json();
+        break;
+      } catch (e) { err = e; }
+    }
+    if (!data) { osmStatus("Не удалось загрузить OSM: " + (err && err.message)); return; }
+    const roadsByClass = {}, rails = [];
+    for (const el of data.elements || []) {
+      if (!el.geometry) continue;
+      const line = el.geometry.map(p => [p.lat, p.lon]);
+      const hw = el.tags && el.tags.highway;
+      if (hw && ROAD_W[hw]) (roadsByClass[hw] = roadsByClass[hw] || []).push(line);
+      else if (el.tags && el.tags.railway === "rail") rails.push(line);
+    }
+    st.osm = { roadsByClass, rails };
+    osmCache[key] = st.osm;
+    if (document.getElementById("osm-roads").checked) addOsmLayers();
+    osmStatus(osmSummary());
+  }
+  function osmSummary() {
+    if (!st.osm) return "";
+    const nr = Object.values(st.osm.roadsByClass).reduce((p, c) => p + c.length, 0);
+    return `OSM: дорог ${nr}, линий ЖД ${st.osm.rails.length}`;
+  }
+
+  function addOsmLayers() {
+    if (!st.osm || !map) return;
+    removeOsmLayers(true);
+    const f = zf(map.getZoom());
+    const layers = { roads: [], railCasing: null, railDash: null };
+    // порядок добавления в pane = порядок отрисовки: мелкие → крупные → ЖД
+    const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
+    for (const cls of order) {
+      const lines = st.osm.roadsByClass[cls];
+      if (!lines || !lines.length) continue;
+      const lay = L.polyline(lines, {
+        pane: "roads", color: ROAD_COLOR, weight: ROAD_W[cls] * f,
+        lineCap: "round", lineJoin: "round", interactive: false, opacity: 1,
+      }).addTo(map);
+      layers.roads.push({ layer: lay, base: ROAD_W[cls] });
+    }
+    if (st.osm.rails.length) {
+      layers.railCasing = L.polyline(st.osm.rails, {
+        pane: "roads", color: "#1a1a1a", weight: RAIL.casing * f,
+        lineCap: "butt", interactive: false,
+      }).addTo(map);
+      layers.railDash = L.polyline(st.osm.rails, {
+        pane: "roads", color: "#ffffff", weight: RAIL.dash * f,
+        dashArray: `${RAIL.dashLen * f} ${RAIL.dashLen * f}`, lineCap: "butt", interactive: false,
+      }).addTo(map);
+    }
+    st.osmLayers = layers;
+  }
+  function removeOsmLayers(keepData) {
+    if (st.osmLayers) {
+      st.osmLayers.roads.forEach(r => map.removeLayer(r.layer));
+      if (st.osmLayers.railCasing) map.removeLayer(st.osmLayers.railCasing);
+      if (st.osmLayers.railDash) map.removeLayer(st.osmLayers.railDash);
+      st.osmLayers = null;
+    }
+    if (!keepData) { st.osm = null; osmStatus(""); }
+  }
+  function updateOsmWeights() {
+    if (!st.osmLayers) return;
+    const f = zf(map.getZoom());
+    st.osmLayers.roads.forEach(r => r.layer.setStyle({ weight: r.base * f }));
+    if (st.osmLayers.railCasing) st.osmLayers.railCasing.setStyle({ weight: RAIL.casing * f });
+    if (st.osmLayers.railDash) st.osmLayers.railDash.setStyle({
+      weight: RAIL.dash * f, dashArray: `${RAIL.dashLen * f} ${RAIL.dashLen * f}`,
+    });
+  }
 
   /* ================= территория ================= */
   function startDraw() {
@@ -84,7 +252,6 @@ const Ortho = (() => {
   function onMapDblClick() {
     if (!st.drawing) return;
     const pts = st.drawing.pts;
-    // двойной клик добавляет 2 лишних клика в ту же точку
     while (pts.length > 1 && near(pts[pts.length - 1], pts[pts.length - 2])) pts.pop();
     if (pts.length < 3) { toast("Нужно минимум 3 вершины"); return; }
     cancelDraw();
@@ -138,8 +305,50 @@ const Ortho = (() => {
     rd.readAsText(file);
   }
 
+  /* ================= иконки метро ================= */
+  const ICON_DIR = "assets/metro/";
+  const iconCache = {};   // name -> Promise<{img, ratio}>
+
+  function badgeIconName(tok) {
+    const t = tok.trim().toUpperCase().replace(/Д/g, "D");
+    if (t === "М" || t === "M") return "m";
+    if (t === "МЦК" || t === "MЦК" || t === "MCK") return "line-14";
+    if (/^D[1-5]$/.test(t)) return t.toLowerCase();
+    if (t === "4A" || t === "4А") return "line-4a";
+    if (t === "8A" || t === "8А") return "line-8a";
+    if (/^\d{1,2}$/.test(t) && +t >= 1 && +t <= 18 && +t !== 13) return "line-" + +t;
+    return null;
+  }
+
+  function loadIcon(name) {
+    if (iconCache[name]) return iconCache[name];
+    iconCache[name] = (async () => {
+      const txt = await fetch(ICON_DIR + name + ".svg").then(r => {
+        if (!r.ok) throw new Error(name + ".svg: HTTP " + r.status);
+        return r.text();
+      });
+      const doc = new DOMParser().parseFromString(txt, "image/svg+xml");
+      const root = doc.documentElement;
+      if (!root.getAttribute("width") && root.getAttribute("viewBox")) {
+        const p = root.getAttribute("viewBox").trim().split(/[\s,]+/);
+        root.setAttribute("width", p[2]);
+        root.setAttribute("height", p[3]);
+      }
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(root)], { type: "image/svg+xml" }));
+      const img = await new Promise((res, rej) => {
+        const im = new Image();
+        im.onload = () => res(im);
+        im.onerror = () => rej(new Error("не загрузилась иконка " + name));
+        im.src = url;
+      });
+      return { img, ratio: img.width / img.height };
+    })();
+    return iconCache[name];
+  }
+
   /* ================= аннотации ================= */
   function magenta() { return getComputedStyle(document.documentElement).getPropertyValue("--magenta").trim(); }
+  function frameColor() { return getComputedStyle(document.documentElement).getPropertyValue("--frame").trim(); }
 
   const DEFAULTS = {
     street: { text: "Название улицы", size: 15 },
@@ -168,8 +377,12 @@ const Ortho = (() => {
     const rot = a.rot ? ` rotate(${a.rot}deg)` : "";
     let inner = "";
     if (a.type === "metro") {
-      const badges = (a.badges || []).map(b => `<span class="m-badge b${b}">${b}</span>`).join("");
-      inner = `<div class="m-row"><span class="m-logo">М</span>${badges}</div><div class="m-name">${esc(a.text)}</div>`;
+      const badges = ["М"].concat(a.badges || []).map(b => {
+        const name = badgeIconName(b);
+        return name ? `<img src="${ICON_DIR}${name}.svg" alt="${esc(b)}">`
+                    : `<span class="m-badge">${esc(b)}</span>`;
+      }).join("");
+      inner = `<div class="m-row">${badges}</div><div class="m-name">${esc(a.text)}</div>`;
     } else {
       inner = esc(a.text).replaceAll("\n", "<br>");
     }
@@ -179,7 +392,7 @@ const Ortho = (() => {
       `<div class="ann-inner">${inner}</div></div>`;
     return L.divIcon({ className: "ann-wrap", html, iconSize: [0, 0] });
   }
-  function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
 
   function refreshIcon(a) { a.marker.setIcon(makeIcon(a)); }
   function updateLeader(a) {
@@ -201,7 +414,7 @@ const Ortho = (() => {
     document.getElementById("ann-rot-val").textContent = a.rot || 0;
     document.getElementById("ann-rot-field").style.display = a.type === "metro" ? "none" : "";
     document.getElementById("ann-badges-field").style.display = a.type === "metro" ? "" : "none";
-    document.querySelectorAll(".badge-cb").forEach(cb => cb.checked = (a.badges || []).includes(cb.value));
+    document.getElementById("ann-badges").value = (a.badges || []).join(", ");
   }
 
   function deleteAnn(a) {
@@ -253,6 +466,8 @@ const Ortho = (() => {
     if (!App.district) return;
     const data = {
       district: App.district.ao + "|" + App.district.name,
+      basemap: curBase,
+      frame: document.getElementById("frame-color").value,
       territory: st.territory ? st.territory.latlngs : null,
       annotations: st.annotations.map(a => ({
         type: a.type, latlng: a.latlng, text: a.text, size: a.size, rot: a.rot,
@@ -270,18 +485,32 @@ const Ortho = (() => {
       restoreState(saved);
   }
   function restoreState(saved) {
+    if (saved.frame) setFrameColor(saved.frame);
     if (saved.territory) setTerritory(saved.territory, true);
     for (const a of saved.annotations || []) addAnnotation(a);
     selectAnn(null);
   }
+  function setFrameColor(v) {
+    document.documentElement.style.setProperty("--frame", v);
+    document.getElementById("frame-color").value = v;
+  }
 
   /* ================= экспорт PNG ================= */
-  function projPx(lat, lng, z) {
+  function projPx(lat, lng, z, elliptical) {
     const n = 256 * Math.pow(2, z);
     const x = (lng + 180) / 360 * n;
-    const s = Math.sin(lat * Math.PI / 180);
-    const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
-    return [x, y];
+    let yNorm;
+    if (elliptical) { // EPSG:3395 (Яндекс)
+      const e = 0.0818191908426;
+      const phi = lat * Math.PI / 180;
+      const con = e * Math.sin(phi);
+      const ts = Math.tan(Math.PI / 4 - phi / 2) / Math.pow((1 - con) / (1 + con), e / 2);
+      yNorm = 0.5 + Math.log(ts) / (2 * Math.PI);
+    } else {          // EPSG:3857
+      const s = Math.sin(lat * Math.PI / 180);
+      yNorm = 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+    }
+    return [x, yNorm * n];
   }
   function loadTile(url) {
     return new Promise(res => {
@@ -296,17 +525,29 @@ const Ortho = (() => {
   async function exportPNG() {
     ensureMap();
     await document.fonts.ready;
+    const bm = BASEMAPS[curBase];
+    const ell = bm.crs === "3395";
     const dz = { "1": 0, "2": 1, "3": 2 }[document.getElementById("ortho-scale").value];
     const z = Math.round(map.getZoom());
-    const zE = Math.min(z + dz, 19);
+    const zE = Math.min(z + dz, bm.maxNativeZoom);
     const s = Math.pow(2, zE - z);
     const b = map.getBounds();
-    const [x0, y0] = projPx(b.getNorth(), b.getWest(), zE);
-    const [x1, y1] = projPx(b.getSouth(), b.getEast(), zE);
+    const [x0, y0] = projPx(b.getNorth(), b.getWest(), zE, ell);
+    const [x1, y1] = projPx(b.getSouth(), b.getEast(), zE, ell);
     const W = Math.round(x1 - x0), H = Math.round(y1 - y0);
     if (W * H > 64e6) { toast("Слишком большой экспорт — уменьшите детализацию или окно"); return; }
-    toast("Собираю тайлы…", 60000);
 
+    // предзагрузка иконок метро
+    const iconNames = new Set();
+    for (const a of st.annotations) {
+      if (a.type !== "metro") continue;
+      iconNames.add("m");
+      for (const t of a.badges || []) { const n = badgeIconName(t); if (n) iconNames.add(n); }
+    }
+    const icons = {};
+    await Promise.all([...iconNames].map(async n => { try { icons[n] = await loadIcon(n); } catch (e) {} }));
+
+    toast("Собираю тайлы…", 60000);
     const canvas = document.createElement("canvas");
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
@@ -315,17 +556,53 @@ const Ortho = (() => {
     const t0x = Math.floor(x0 / 256), t1x = Math.floor(x1 / 256);
     const t0y = Math.floor(y0 / 256), t1y = Math.floor(y1 / 256);
     const jobs = [];
+    let okTiles = 0, allTiles = 0;
     for (let tx = t0x; tx <= t1x; tx++)
-      for (let ty = t0y; ty <= t1y; ty++)
-        jobs.push(loadTile(TILE_URL.replace("{z}", zE).replace("{x}", tx).replace("{y}", ty))
-          .then(im => { if (im) ctx.drawImage(im, Math.round(tx * 256 - x0), Math.round(ty * 256 - y0)); }));
+      for (let ty = t0y; ty <= t1y; ty++) {
+        allTiles++;
+        const url = bm.url.replace("{z}", zE).replace("{x}", tx).replace("{y}", ty);
+        jobs.push(loadTile(url).then(im => {
+          if (im) { okTiles++; ctx.drawImage(im, Math.round(tx * 256 - x0), Math.round(ty * 256 - y0)); }
+        }));
+      }
     await Promise.all(jobs);
+    if (okTiles < allTiles * 0.5)
+      toast(`Загрузилась только часть тайлов (${okTiles}/${allTiles}) — попробуйте другую подложку`, 6000);
 
     const P = (latlng) => {
       const ll = Array.isArray(latlng) ? { lat: latlng[0], lng: latlng[1] } : latlng;
-      const [x, y] = projPx(ll.lat, ll.lng, zE);
+      const [x, y] = projPx(ll.lat, ll.lng, zE, ell);
       return [x - x0, y - y0];
     };
+    const strokeLine = (line, isLatLngPairs) => {
+      ctx.beginPath();
+      line.forEach((pt, i) => {
+        const [x, y] = P(pt);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.stroke();
+    };
+
+    // дороги и ЖД (если включены)
+    if (st.osm && document.getElementById("osm-roads").checked) {
+      const f = zf(zE);
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      ctx.strokeStyle = ROAD_COLOR;
+      const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
+      for (const cls of order) {
+        const lines = st.osm.roadsByClass[cls];
+        if (!lines) continue;
+        ctx.lineWidth = ROAD_W[cls] * f;
+        for (const line of lines) strokeLine(line);
+      }
+      ctx.lineCap = "butt";
+      ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = RAIL.casing * f;
+      for (const line of st.osm.rails) strokeLine(line);
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = RAIL.dash * f;
+      ctx.setLineDash([RAIL.dashLen * f, RAIL.dashLen * f]);
+      for (const line of st.osm.rails) strokeLine(line);
+      ctx.setLineDash([]);
+    }
 
     // маска вне района
     if (App.district) {
@@ -341,7 +618,6 @@ const Ortho = (() => {
       }
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.fill(p, "evenodd");
-      // белая кромка района
       ctx.strokeStyle = "#fff"; ctx.lineWidth = 2.5 * s; ctx.lineJoin = "round";
       for (const ring of rings) {
         ctx.beginPath();
@@ -373,14 +649,15 @@ const Ortho = (() => {
     }
 
     // аннотации
-    for (const a of st.annotations) drawAnnOnCanvas(ctx, a, P, s);
+    for (const a of st.annotations) drawAnnOnCanvas(ctx, a, P, s, icons);
 
     // атрибуция
-    ctx.font = `${11 * s}px 'Golos Text', Arial`;
+    ctx.font = `${11 * s}px ${App.FONT}`;
     ctx.textAlign = "right"; ctx.textBaseline = "bottom";
     ctx.lineWidth = 3 * s; ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineJoin = "round";
-    ctx.strokeText(ATTR, W - 8 * s, H - 6 * s);
-    ctx.fillStyle = "#333"; ctx.fillText(ATTR, W - 8 * s, H - 6 * s);
+    const attr = bm.attr + (st.osm && document.getElementById("osm-roads").checked ? " · дороги © OpenStreetMap" : "");
+    ctx.strokeText(attr, W - 8 * s, H - 6 * s);
+    ctx.fillStyle = "#333"; ctx.fillText(attr, W - 8 * s, H - 6 * s);
 
     canvas.toBlob(blob => {
       const a = document.createElement("a");
@@ -391,7 +668,7 @@ const Ortho = (() => {
     }, "image/png");
   }
 
-  function drawAnnOnCanvas(ctx, a, P, s) {
+  function drawAnnOnCanvas(ctx, a, P, s, icons) {
     const [x, y] = P(a.latlng);
     const size = a.size * s;
     ctx.save();
@@ -400,47 +677,55 @@ const Ortho = (() => {
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
 
     if (a.type === "street") {
-      ctx.font = `600 ${size}px 'Golos Text', Arial`;
+      ctx.font = `600 ${size}px ${App.FONT}`;
       drawHaloLines(ctx, a.text, size, "#1a1a1a", "#fff", size * 0.3);
     } else if (a.type === "district") {
-      ctx.font = `700 ${size}px 'Golos Text', Arial`;
+      ctx.font = `700 ${size}px ${App.FONT}`;
       try { ctx.letterSpacing = (size * 0.14) + "px"; } catch (e) {}
       ctx.shadowColor = "rgba(0,0,0,.85)"; ctx.shadowBlur = 4 * s;
       drawHaloLines(ctx, a.text.toUpperCase(), size, "#fff", "rgba(0,0,0,.75)", size * 0.16);
       ctx.shadowBlur = 0;
       try { ctx.letterSpacing = "0px"; } catch (e) {}
     } else if (a.type === "callout") {
-      ctx.font = `600 ${size}px 'Golos Text', Arial`;
+      ctx.font = `600 ${size}px ${App.FONT}`;
       const lines = (a.text || "").split("\n");
       const tw = Math.max(...lines.map(l => ctx.measureText(l).width));
       const lh = size * 1.35;
       const w = tw + size * 1.8, h = lines.length * lh + size * 0.9;
       ctx.fillStyle = "#fff"; ctx.fillRect(-w / 2, -h / 2, w, h);
-      ctx.strokeStyle = magenta(); ctx.lineWidth = 2.5 * s;
+      ctx.strokeStyle = frameColor(); ctx.lineWidth = 2.5 * s;
       ctx.strokeRect(-w / 2, -h / 2, w, h);
       ctx.fillStyle = "#111";
       lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1) / 2) * lh));
     } else if (a.type === "metro") {
-      // ряд: [М][бейджи], ниже — название
-      ctx.font = `700 ${size}px 'Golos Text', Arial`;
-      const items = [{ txt: "М", bg: "#d6083b" }].concat((a.badges || []).map(bd => ({
-        txt: bd, bg: { D1: "#f2a03d", D2: "#e84393", D3: "#e8703d", D4: "#159e8c", "МЦК": "#d6083b" }[bd] || "#888",
-      })));
-      const bh = size * 1.35, gap = size * 0.25, r = size * 0.2;
-      const widths = items.map(it => ctx.measureText(it.txt).width + size * 0.6);
-      const total = widths.reduce((p, c) => p + c, 0) + gap * (items.length - 1);
-      let cx = -total / 2;
-      const rowY = -size * 0.55;
-      items.forEach((it, i) => {
-        ctx.fillStyle = it.bg;
-        roundRect(ctx, cx, rowY - bh / 2, widths[i], bh, r);
-        ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.fillText(it.txt, cx + widths[i] / 2, rowY + size * 0.05);
-        cx += widths[i] + gap;
+      // ряд иконок [М][бейджи], ниже — название
+      const ih = size * 1.2;             // высота иконки
+      const gap = size * 0.25;
+      const toks = ["М"].concat(a.badges || []);
+      const items = toks.map(t => {
+        const n = badgeIconName(t);
+        if (n && icons[n]) return { icon: icons[n], w: ih * icons[n].ratio };
+        ctx.font = `700 ${size}px ${App.FONT}`;
+        return { txt: t, w: ctx.measureText(t).width + size * 0.6 };
       });
+      const total = items.reduce((p, c) => p + c.w, 0) + gap * (items.length - 1);
+      let cx = -total / 2;
+      const rowY = -size * 0.62;
+      for (const it of items) {
+        if (it.icon) {
+          ctx.drawImage(it.icon.img, cx, rowY - ih / 2, it.w, ih);
+        } else {
+          ctx.fillStyle = "#888";
+          roundRect(ctx, cx, rowY - ih / 2, it.w, ih, size * 0.2);
+          ctx.fill();
+          ctx.fillStyle = "#fff";
+          ctx.font = `700 ${size}px ${App.FONT}`;
+          ctx.fillText(it.txt, cx + it.w / 2, rowY + size * 0.05);
+        }
+        cx += it.w + gap;
+      }
       const nameY = size * 0.75;
-      ctx.font = `700 ${size}px 'Golos Text', Arial`;
+      ctx.font = `700 ${size}px ${App.FONT}`;
       ctx.lineWidth = size * 0.28; ctx.strokeStyle = "#fff"; ctx.lineJoin = "round";
       ctx.strokeText(a.text, 0, nameY);
       ctx.fillStyle = "#d6083b";
@@ -469,6 +754,15 @@ const Ortho = (() => {
   }
 
   /* ================= UI ================= */
+  document.getElementById("basemap").addEventListener("change", e => setBasemap(e.target.value));
+  document.getElementById("osm-roads").addEventListener("change", e => {
+    if (!inited) return;
+    if (e.target.checked) { st.osm ? addOsmLayers() : loadOSM(); }
+    else removeOsmLayers(true);
+  });
+  document.getElementById("frame-color").addEventListener("input", e => {
+    setFrameColor(e.target.value); save();
+  });
   document.getElementById("ortho-draw").addEventListener("click", () =>
     st.drawing ? cancelDraw() : startDraw());
   document.getElementById("ortho-clear-territory").addEventListener("click", () => {
@@ -510,11 +804,11 @@ const Ortho = (() => {
     document.getElementById("ann-rot-val").textContent = e.target.value;
     refreshIcon(st.selected); save();
   });
-  document.querySelectorAll(".badge-cb").forEach(cb => cb.addEventListener("change", () => {
-    if (!st.selected) return;
-    st.selected.badges = [...document.querySelectorAll(".badge-cb:checked")].map(x => x.value);
+  document.getElementById("ann-badges").addEventListener("input", e => {
+    if (!st.selected || st.selected.type !== "metro") return;
+    st.selected.badges = e.target.value.split(/[,;]+/).map(x => x.trim()).filter(Boolean);
     refreshIcon(st.selected); save();
-  }));
+  });
   document.getElementById("ann-delete").addEventListener("click", () => deleteAnn(st.selected));
 
   document.addEventListener("keydown", e => {

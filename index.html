@@ -6,7 +6,7 @@
 <title>КУГИС — схемы и ортофотопланы</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Didact+Gothic&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -63,6 +63,16 @@
     <aside class="sidebar">
       <h3>Ортофотоплан</h3>
       <div class="group">
+        <b>Подложка</b>
+        <select id="basemap">
+          <option value="yandex" selected>Яндекс Спутник</option>
+          <option value="esri">Esri World Imagery (Maxar)</option>
+          <option value="s2">Sentinel-2 cloudless 2024 (EOX)</option>
+        </select>
+        <label class="check"><input type="checkbox" id="osm-roads" checked> Дороги и ЖД из OSM</label>
+        <div class="hint" id="osm-status"></div>
+      </div>
+      <div class="group">
         <b>Территория</b>
         <button class="btn" id="ortho-draw">✏ Нарисовать границу</button>
         <button class="btn" id="ortho-import">Загрузить GeoJSON</button>
@@ -86,16 +96,17 @@
         <div class="field" id="ann-rot-field"><label>Поворот <span id="ann-rot-val"></span>°</label>
           <input type="range" id="ann-rot" min="-90" max="90" step="1" value="0"></div>
         <div class="field" id="ann-badges-field">
-          <label>Линии (бейджи)</label>
-          <div class="badges-row">
-            <label><input type="checkbox" class="badge-cb" value="D1">D1</label>
-            <label><input type="checkbox" class="badge-cb" value="D2">D2</label>
-            <label><input type="checkbox" class="badge-cb" value="D3">D3</label>
-            <label><input type="checkbox" class="badge-cb" value="D4">D4</label>
-            <label><input type="checkbox" class="badge-cb" value="МЦК">МЦК</label>
-          </div>
+          <label>Линии (через запятую): 1–18, 4А, 8А, D1–D5, МЦК</label>
+          <input type="text" id="ann-badges" placeholder="напр.: 9, D2">
         </div>
         <button class="btn danger" id="ann-delete">Удалить</button>
+      </div>
+      <div class="group">
+        <b>Оформление</b>
+        <div class="field">
+          <label>Цвет рамки выноски</label>
+          <input type="color" id="frame-color" value="#c49a6c">
+        </div>
       </div>
       <div class="group">
         <b>Экспорт</b>

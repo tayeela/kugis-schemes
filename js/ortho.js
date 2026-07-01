@@ -66,7 +66,7 @@ const Ortho = (() => {
     inited = true;
     createMap([55.75, 37.62], 11);
     if (App.district) applyDistrict(App.district);
-    restore();
+    if (!restore() && App.district) autoAddStations(App.district);
     if (document.getElementById("osm-roads").checked) loadOSM();
   }
   function onShow() { ensureMap(); setTimeout(() => map.invalidateSize(), 50); }
@@ -106,7 +106,7 @@ const Ortho = (() => {
       stroke: false, fillColor: "#fff", fillOpacity: 0.55, interactive: false,
     }).addTo(map);
     st.edgeLayer = L.polygon(rings, {
-      color: "#fff", weight: 2.5, fill: false, interactive: false,
+      color: frameColor(), weight: 3, fill: false, interactive: false,
     }).addTo(map);
     if (!keepView) map.fitBounds(L.latLngBounds(rings.flat()), { padding: [30, 30] });
   }
@@ -118,8 +118,33 @@ const Ortho = (() => {
     removeOsmLayers();
     applyDistrict(d);
     if (saved && saved.district === d.ao + "|" + d.name) restoreState(saved);
+    else autoAddStations(d);
     if (document.getElementById("osm-roads").checked) loadOSM();
   });
+
+  /* станции метро/МЦК/МЦД в границах района (+20%) — автоматически */
+  function autoAddStations(d) {
+    const [x0, y0, x1, y1] = ringsBBox(geomOuterRings(d.feature.geometry));
+    const px = (x1 - x0) * 0.2, py = (y1 - y0) * 0.2;
+    addStationsInBounds(L.latLngBounds([y0 - py, x0 - px], [y1 + py, x1 + px]), true);
+  }
+
+  function addStationsInBounds(b, quiet) {
+    let n = 0;
+    for (const f of App.stations.features) {
+      const [lng, lat] = f.geometry.coordinates;
+      if (!b.contains([lat, lng])) continue;
+      if (st.annotations.some(a => a.type === "metro" && a.text === f.properties.name)) continue;
+      addAnnotation({
+        type: "metro", latlng: { lat, lng }, text: f.properties.name,
+        badges: (f.properties.lines || []).slice(), size: 14,
+      });
+      n++;
+    }
+    selectAnn(null);
+    if (!quiet) toast(n ? `Добавлено станций: ${n}` : "В текущем кадре станций нет");
+    save();
+  }
 
   /* ================= дороги и ЖД из OSM (Overpass) ================= */
   const OVERPASS = [
@@ -443,21 +468,7 @@ const Ortho = (() => {
 
   function addStationsInView() {
     ensureMap();
-    const b = map.getBounds();
-    let n = 0;
-    for (const f of App.stations.features) {
-      const [lng, lat] = f.geometry.coordinates;
-      if (!b.contains([lat, lng])) continue;
-      const line = f.properties.line;
-      addAnnotation({
-        type: "metro", latlng: { lat, lng }, text: f.properties.name,
-        badges: [line === "МЦК" ? "МЦК" : "D2"], size: 14,
-      });
-      n++;
-    }
-    selectAnn(null);
-    toast(n ? `Добавлено станций: ${n}` : "В текущем кадре станций МЦК/МЦД-2 нет");
-    save();
+    addStationsInBounds(map.getBounds());
   }
 
   /* ================= сохранение ================= */
@@ -481,8 +492,11 @@ const Ortho = (() => {
   }
   function restore() {
     const saved = readSaved();
-    if (saved && App.district && saved.district === App.district.ao + "|" + App.district.name)
+    if (saved && App.district && saved.district === App.district.ao + "|" + App.district.name) {
       restoreState(saved);
+      return true;
+    }
+    return false;
   }
   function restoreState(saved) {
     if (saved.frame) setFrameColor(saved.frame);
@@ -493,6 +507,7 @@ const Ortho = (() => {
   function setFrameColor(v) {
     document.documentElement.style.setProperty("--frame", v);
     document.getElementById("frame-color").value = v;
+    if (st.edgeLayer) st.edgeLayer.setStyle({ color: v });
   }
 
   /* ================= экспорт PNG ================= */
@@ -618,7 +633,7 @@ const Ortho = (() => {
       }
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.fill(p, "evenodd");
-      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2.5 * s; ctx.lineJoin = "round";
+      ctx.strokeStyle = frameColor(); ctx.lineWidth = 3 * s; ctx.lineJoin = "round";
       for (const ring of rings) {
         ctx.beginPath();
         ring.forEach(([lng, lat], i) => {

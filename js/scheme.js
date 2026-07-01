@@ -89,14 +89,15 @@ const Scheme = (() => {
       if (seen.has(name)) continue;
       seen.add(name);
       const text = AO_FULL[name] || name;
+      // позиция — полюс недоступности, кегль единый для всех округов
       const fit = fitLabel(text, f.geometry, st.projL,
-        { min: 11, max: name === d.ao ? 28 : 25, weight: 600, allowSplit: false });
-      st.aoLabels.push({ text, x: fit.x, y: fit.y, size: fit.size, parts: [text] });
+        { min: 24, max: 24, weight: 600, allowSplit: false });
+      st.aoLabels.push({ text, x: fit.x, y: fit.y, size: 24, parts: [text] });
     }
 
     st.rayLabels = rayInAo.map(f => {
       const text = fixYo(f.properties.name);
-      const fit = fitLabel(text, f.geometry, st.projR, { min: 9, max: 19, weight: 500 });
+      const fit = fitLabel(text, f.geometry, st.projR, { min: 10, max: 16, weight: 500 });
       return { text, x: fit.x, y: fit.y, size: fit.size, parts: fit.parts };
     });
 

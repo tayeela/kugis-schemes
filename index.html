@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КУГИС — схемы и ортофотопланы</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div id="logo">КУГИС · генератор схем</div>
+  <nav id="tabs">
+    <button class="tab active" data-tab="scheme">Схема расположения</button>
+    <button class="tab" data-tab="ortho">Ортофотоплан</button>
+  </nav>
+  <div id="district-picker">
+    <label>Район:</label>
+    <select id="district-select"></select>
+  </div>
+</header>
+
+<main>
+  <!-- ============ Схема расположения ============ -->
+  <section id="panel-scheme" class="panel active">
+    <aside class="sidebar">
+      <h3>Схема расположения</h3>
+      <div class="field">
+        <label>Название района (для подписи)</label>
+        <input type="text" id="scheme-name">
+      </div>
+      <div class="field">
+        <label>Текст выноски (строка 1)</label>
+        <input type="text" id="scheme-callout1" value="рассматриваемая территория">
+      </div>
+      <div class="field">
+        <label>Текст выноски (строка 2, жирным)</label>
+        <input type="text" id="scheme-callout2">
+      </div>
+      <p class="hint">Подписи, точку и выноску можно перетаскивать мышью прямо на схеме.</p>
+      <div class="field">
+        <label>Размер PNG</label>
+        <select id="scheme-scale">
+          <option value="1">1600 × 1131</option>
+          <option value="2" selected>3200 × 2263</option>
+          <option value="3">4800 × 3394</option>
+        </select>
+      </div>
+      <button class="btn primary" id="scheme-png">Скачать PNG</button>
+      <button class="btn" id="scheme-svg">Скачать SVG</button>
+      <button class="btn" id="scheme-reset">Сбросить подписи</button>
+    </aside>
+    <div class="workspace" id="scheme-workspace">
+      <svg id="scheme-svg-root" viewBox="0 0 1600 1131" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </section>
+
+  <!-- ============ Ортофотоплан ============ -->
+  <section id="panel-ortho" class="panel">
+    <aside class="sidebar">
+      <h3>Ортофотоплан</h3>
+      <div class="group">
+        <b>Территория</b>
+        <button class="btn" id="ortho-draw">✏ Нарисовать границу</button>
+        <button class="btn" id="ortho-import">Загрузить GeoJSON</button>
+        <input type="file" id="ortho-file" accept=".geojson,.json" hidden>
+        <button class="btn" id="ortho-clear-territory">Удалить границу</button>
+        <div class="hint" id="ortho-area"></div>
+      </div>
+      <div class="group">
+        <b>Добавить подпись</b>
+        <button class="btn" id="add-street">Улица</button>
+        <button class="btn" id="add-district">Район / округ</button>
+        <button class="btn" id="add-metro">Станция метро</button>
+        <button class="btn" id="add-callout">Выноска-рамка</button>
+        <button class="btn" id="add-stations">⚑ Станции МЦК/МЦД в кадре</button>
+      </div>
+      <div class="group" id="ann-props" hidden>
+        <b>Выбранная подпись</b>
+        <div class="field"><label>Текст</label><textarea id="ann-text" rows="2"></textarea></div>
+        <div class="field"><label>Размер <span id="ann-size-val"></span></label>
+          <input type="range" id="ann-size" min="8" max="60" step="1"></div>
+        <div class="field" id="ann-rot-field"><label>Поворот <span id="ann-rot-val"></span>°</label>
+          <input type="range" id="ann-rot" min="-90" max="90" step="1" value="0"></div>
+        <div class="field" id="ann-badges-field">
+          <label>Линии (бейджи)</label>
+          <div class="badges-row">
+            <label><input type="checkbox" class="badge-cb" value="D1">D1</label>
+            <label><input type="checkbox" class="badge-cb" value="D2">D2</label>
+            <label><input type="checkbox" class="badge-cb" value="D3">D3</label>
+            <label><input type="checkbox" class="badge-cb" value="D4">D4</label>
+            <label><input type="checkbox" class="badge-cb" value="МЦК">МЦК</label>
+          </div>
+        </div>
+        <button class="btn danger" id="ann-delete">Удалить</button>
+      </div>
+      <div class="group">
+        <b>Экспорт</b>
+        <div class="field">
+          <label>Детализация</label>
+          <select id="ortho-scale">
+            <option value="1">1× (как на экране)</option>
+            <option value="2" selected>2×</option>
+            <option value="3">3× (медленно)</option>
+          </select>
+        </div>
+        <button class="btn primary" id="ortho-png">Скачать PNG</button>
+      </div>
+      <p class="hint">Подложка: Esri World Imagery. Подписи перетаскиваются мышью; клик по подписи — редактирование.</p>
+    </aside>
+    <div class="workspace">
+      <div id="map"></div>
+      <div id="draw-tip" hidden>Кликайте по карте, чтобы ставить вершины. Двойной клик — завершить. Esc — отмена.</div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" hidden></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/app.js"></script>
+<script src="js/scheme.js"></script>
+<script src="js/ortho.js"></script>
+</body>
+</html>

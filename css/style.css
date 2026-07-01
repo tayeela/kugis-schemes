@@ -1,0 +1,121 @@
+:root {
+  --pink-fill: #f8c9e2;
+  --pink-stroke: #ec3ea0;
+  --magenta: #ff00dd;
+  --ui-bg: #f4f5f7;
+  --ui-border: #d9dce1;
+  --accent: #0f6fd6;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: "Golos Text", Arial, sans-serif;
+  display: flex; flex-direction: column;
+  color: #1c1e21; background: var(--ui-bg);
+}
+
+#topbar {
+  display: flex; align-items: center; gap: 24px;
+  padding: 8px 16px; background: #fff; border-bottom: 1px solid var(--ui-border);
+  flex: 0 0 auto;
+}
+#logo { font-weight: 700; font-size: 15px; }
+#tabs { display: flex; gap: 4px; }
+.tab {
+  border: 1px solid var(--ui-border); background: #fff; border-radius: 8px;
+  padding: 7px 14px; font: inherit; font-size: 14px; cursor: pointer;
+}
+.tab.active { background: #1c1e21; color: #fff; border-color: #1c1e21; }
+#district-picker { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 14px; }
+#district-select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--ui-border); max-width: 320px; }
+
+main { flex: 1 1 auto; min-height: 0; }
+.panel { display: none; height: 100%; }
+.panel.active { display: flex; }
+
+.sidebar {
+  flex: 0 0 280px; overflow-y: auto;
+  background: #fff; border-right: 1px solid var(--ui-border);
+  padding: 14px 16px 40px;
+}
+.sidebar h3 { margin: 0 0 12px; font-size: 15px; }
+.group { border-top: 1px solid var(--ui-border); padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.group > b { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #666; }
+.field { margin: 8px 0; }
+.field label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
+.field input[type=text], .field select, .field textarea {
+  width: 100%; font: inherit; font-size: 13px; padding: 7px 8px;
+  border: 1px solid var(--ui-border); border-radius: 8px;
+}
+.field input[type=range] { width: 100%; }
+.btn {
+  display: block; width: 100%; margin: 3px 0; padding: 8px 10px;
+  font: inherit; font-size: 13px; border: 1px solid var(--ui-border);
+  border-radius: 8px; background: #fff; cursor: pointer; text-align: left;
+}
+.btn:hover { background: #f0f2f5; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:hover { background: #0c5cb2; }
+.btn.danger { color: #c0392b; }
+.btn.active-tool { background: #1c1e21; color: #fff; border-color: #1c1e21; }
+.hint { font-size: 12px; color: #777; line-height: 1.45; }
+.badges-row { display: flex; gap: 10px; font-size: 13px; flex-wrap: wrap; }
+.badges-row label { display: flex; gap: 3px; align-items: center; }
+
+.workspace { flex: 1 1 auto; position: relative; min-width: 0; overflow: hidden; }
+#scheme-workspace { display: flex; align-items: center; justify-content: center; padding: 12px; }
+#scheme-svg-root {
+  background: #fff; box-shadow: 0 2px 14px rgba(0,0,0,.12);
+  height: 100%; width: auto; max-width: 100%; aspect-ratio: 1600/1131;
+}
+#scheme-svg-root .draggable { cursor: grab; }
+#scheme-svg-root .draggable:active { cursor: grabbing; }
+
+#map { position: absolute; inset: 0; }
+#draw-tip {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: #1c1e21; color: #fff; padding: 8px 14px; border-radius: 8px;
+  font-size: 13px; z-index: 1000; pointer-events: none;
+}
+
+#toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: #1c1e21; color: #fff; padding: 10px 18px; border-radius: 10px;
+  font-size: 14px; z-index: 3000;
+}
+
+/* ---------- аннотации на карте ---------- */
+.leaflet-div-icon.ann-wrap { background: none; border: none; }
+.ann { position: absolute; transform: translate(-50%, -50%); white-space: pre; user-select: none; }
+.ann-inner { display: inline-block; }
+.ann.selected .ann-inner { outline: 2px dashed var(--accent); outline-offset: 3px; }
+
+.ann-street .ann-inner {
+  font-weight: 600; color: #1a1a1a;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 4px #fff, 1px 1px 2px #fff, -1px -1px 2px #fff, 1px -1px 2px #fff, -1px 1px 2px #fff;
+}
+.ann-district .ann-inner {
+  font-weight: 700; color: #fff; letter-spacing: .14em; text-transform: uppercase; text-align: center;
+  text-shadow: 0 0 4px rgba(0,0,0,.9), 0 0 8px rgba(0,0,0,.7), 1px 1px 3px rgba(0,0,0,.9);
+}
+.ann-callout .ann-inner {
+  background: #fff; border: 2.5px solid var(--magenta);
+  padding: .45em .9em; font-weight: 600; color: #111; text-align: center; line-height: 1.35;
+}
+.ann-metro .ann-inner { text-align: center; }
+.ann-metro .m-row { display: flex; gap: .25em; align-items: center; justify-content: center; }
+.ann-metro .m-logo {
+  background: #d6083b; color: #fff; font-weight: 700; border-radius: .2em;
+  padding: 0 .3em; line-height: 1.35;
+}
+.ann-metro .m-badge { color: #fff; font-weight: 700; border-radius: .25em; padding: 0 .3em; line-height: 1.35; }
+.m-badge.bD1 { background: #f2a03d; }
+.m-badge.bD2 { background: #e84393; }
+.m-badge.bD3 { background: #e8703d; }
+.m-badge.bD4 { background: #159e8c; }
+.m-badge.bМЦК { background: #d6083b; }
+.ann-metro .m-name {
+  color: #d6083b; font-weight: 700; margin-top: .15em;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 1px 1px 2px #fff, -1px -1px 2px #fff;
+}

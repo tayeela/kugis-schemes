@@ -147,15 +147,15 @@ const Scheme = (() => {
     }
     for (const f of rayInAo) {
       const text = fixYo(f.properties.name);
-      const fit = fitLabel(text, f.geometry, st.projR, { min: 11, max: 16, weight: 500 });
-      st.labels.push({ kind: "ray", text: fit.parts.join("\n"), x: fit.x, y: fit.y, size: fit.size, rot: 0, parts: fit.parts, weight: 500 });
+      const fit = fitLabel(text, f.geometry, st.projR, { min: 15, max: 15, weight: 500 });
+      st.labels.push({ kind: "ray", text: fit.parts.join("\n"), x: fit.x, y: fit.y, size: 15, rot: 0, parts: fit.parts, weight: 500 });
     }
     for (const f of App.rayony.features.filter(x => x.properties.ao !== d.ao)) {
       const text = fixYo(f.properties.name);
-      const fit = fitLabel(text, f.geometry, st.projR, { min: 10, max: 15, weight: 500 });
+      const fit = fitLabel(text, f.geometry, st.projR, { min: 15, max: 15, weight: 500 });
       if (fit.areaPx < 4500) continue; // мелкие на этом масштабе не подписываем
       if (fit.x < 750 || fit.x > 1585 || fit.y < 20 || fit.y > H - 20) continue;
-      st.labels.push({ kind: "ray", text: fit.parts.join("\n"), x: fit.x, y: fit.y, size: fit.size, rot: 0, parts: fit.parts, weight: 500 });
+      st.labels.push({ kind: "ray", text: fit.parts.join("\n"), x: fit.x, y: fit.y, size: 15, rot: 0, parts: fit.parts, weight: 500 });
     }
     resolveOverlaps(st.labels.filter(l => l.kind === "ao"));
     resolveOverlaps(st.labels.filter(l => l.kind === "ray"));

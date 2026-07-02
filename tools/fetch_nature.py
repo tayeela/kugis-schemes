@@ -14,42 +14,46 @@ OUT = os.path.join(BASE, "data", "nature.geojson")
 ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 ]
 
-Q = """
-[out:json][timeout:600][maxsize:1073741824];
-area["name"="Москва"]["boundary"="administrative"]["admin_level"="4"]->.a;
-(
-  way["natural"="wood"](area.a);
-  relation["natural"="wood"](area.a);
-  way["landuse"="forest"](area.a);
-  relation["landuse"="forest"](area.a);
-  way["natural"="water"](area.a);
-  relation["natural"="water"](area.a);
-);
-out geom;
-"""
+# bbox-запросы вместо area: без area-движка сервер отвечает даже под нагрузкой,
+# по границе Москвы всё равно режем локально
+TAGS = {
+    "wood": ['"natural"="wood"', '"landuse"="forest"'],
+    "park": ['"leisure"="park"'],
+    "water": ['"natural"="water"'],
+}
+
+def q_for(tags, bb):
+    body = "".join(f'way[{t}]({bb});relation[{t}]({bb});' for t in tags)
+    return f"[out:json][timeout:300][maxsize:1073741824];({body});out geom;"
 
 def overpass(query):
     data = urllib.parse.urlencode({"data": query}).encode()
     last = None
-    for ep in ENDPOINTS:
-        try:
-            print("  ", ep)
-            req = urllib.request.Request(ep, data=data, headers={"User-Agent": "kugis-schemes/1.0"})
-            t0 = time.time()
-            with urllib.request.urlopen(req, timeout=900) as r:
-                raw = r.read()
-            print(f"   получено {len(raw)//1048576} МБ за {time.time()-t0:.0f} с")
-            return json.loads(raw)
-        except Exception as e:
-            last = e
-            print("   ошибка:", e)
-            time.sleep(10)
+    for attempt in range(2):
+        for ep in ENDPOINTS:
+            try:
+                print("  ", ep)
+                req = urllib.request.Request(ep, data=data, headers={"User-Agent": "kugis-schemes/1.0"})
+                t0 = time.time()
+                with urllib.request.urlopen(req, timeout=900) as r:
+                    raw = r.read()
+                print(f"   получено {len(raw)//1048576} МБ за {time.time()-t0:.0f} с")
+                return json.loads(raw)
+            except Exception as e:
+                last = e
+                print("   ошибка:", e)
+                time.sleep(20)
     raise last
 
-def is_water(tags):
-    return tags.get("natural") == "water"
+def kind_of(tags):
+    if tags.get("natural") == "water":
+        return "r"
+    if tags.get("leisure") == "park":
+        return "p"
+    return "w"
 
 def way_polygon(el):
     g = el.get("geometry")
@@ -89,24 +93,50 @@ ok = json.load(open(os.path.join(BASE, "data", "okruga.geojson"), encoding="utf-
 moscow = unary_union([shape(f["geometry"]).buffer(0) for f in ok["features"]]).buffer(0.0005)
 print("   ok, площадь (град²):", round(moscow.area, 4))
 
-print("2) Overpass: леса и вода по всей Москве…")
-data = overpass(Q)
-els = data.get("elements", [])
+print("2) Overpass: леса, парки и вода по всей Москве…")
+mb = moscow.bounds  # (W, S, E, N)
+seen = set()
+els = []
+
+def fetch_tile(tags, bb, depth=0):
+    """bbox-запрос; при 504 делим бокс на четверти."""
+    try:
+        data = overpass(q_for(tags, bb))
+    except Exception as e:
+        if depth >= 2:
+            raise
+        print(f"   делю bbox (глубина {depth + 1})…")
+        s, w, n, e = bb
+        my, mx = (s + n) / 2, (w + e) / 2
+        for sub in ((s, w, my, mx), (s, mx, my, e), (my, w, n, mx), (my, mx, n, e)):
+            fetch_tile(tags, sub, depth + 1)
+            time.sleep(5)
+        return
+    for el in data.get("elements", []):
+        key = (el["type"], el["id"])
+        if key not in seen:
+            seen.add(key)
+            els.append(el)
+
+for part, tags in TAGS.items():
+    print(f"   часть: {part}")
+    fetch_tile(tags, (round(mb[1] - 0.01, 3), round(mb[0] - 0.01, 3),
+                      round(mb[3] + 0.01, 3), round(mb[2] + 0.01, 3)))
+    time.sleep(5)
 print("   элементов:", len(els))
 
-TOL = 0.00025          # ~22 м
-MIN_WOOD = 20000       # м²  (2 га)
-MIN_WATER = 8000       # м²
+TOL = 0.00015          # ~13 м — мягкое упрощение, скверы не схлопываются
+MIN_M2 = {"w": 5000, "p": 4000, "r": 4000}   # 0.5 га лес, 0.4 га парк/вода
 
 def approx_m2(pg, lat=55.6):
     k = 111320.0
     return pg.area * k * k * math.cos(math.radians(lat))
 
-feats = {"w": [], "r": []}
+feats = {"w": [], "p": [], "r": []}
 skip, cnt = 0, 0
 for el in els:
     tags = el.get("tags", {})
-    kind = "r" if is_water(tags) else "w"
+    kind = kind_of(tags)
     pg = way_polygon(el) if el["type"] == "way" else relation_polygon(el)
     if pg is None or pg.is_empty:
         skip += 1
@@ -118,7 +148,7 @@ for el in els:
         pg = pg.simplify(TOL, preserve_topology=False)
         if pg.is_empty:
             continue
-        if approx_m2(pg) < (MIN_WATER if kind == "r" else MIN_WOOD):
+        if approx_m2(pg) < MIN_M2[kind]:
             continue
         pg = pg.intersection(moscow)
         if pg.is_empty:
@@ -127,7 +157,7 @@ for el in els:
     except Exception:
         skip += 1
 
-print(f"   лесов: {len(feats['w'])}, воды: {len(feats['r'])}, пропущено: {skip}")
+print(f"   лесов: {len(feats['w'])}, парков: {len(feats['p'])}, воды: {len(feats['r'])}, пропущено: {skip}")
 
 def rnd(coords):
     return [[round(x, 5), round(y, 5)] for x, y in coords]

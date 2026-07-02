@@ -33,6 +33,7 @@ const Ortho = (() => {
     unclassified: 6.5, residential: 6.5, living_street: 5, pedestrian: 5,
   };
   const RAIL = { casing: 7.5, dash: 4.5, dashLen: 18 };
+  const BOUNDARY = "#824a43";   // границы районов и округов — всегда этот цвет
   const zf = z => Math.min(3, Math.max(0.15, Math.pow(2, z - 16)));
 
   /* генерализованные ЖД-ходы (data/railways.geojson) -> [[lat,lng],...][] */
@@ -81,7 +82,7 @@ const Ortho = (() => {
       geomRings(f.geometry).map(r => r.map(([x, y]) => [y, x])));
     st.allBounds = L.polyline(lines, {
       renderer: st.boundsCanvas,
-      color: frameColor(), weight: 1.2, interactive: false, opacity: 0.9,
+      color: BOUNDARY, weight: 1.2, interactive: false, opacity: 0.9,
     }).addTo(map);
   }
 
@@ -133,7 +134,7 @@ const Ortho = (() => {
       pane: "mask", stroke: false, fillColor: "#fff", fillOpacity: 0.55, interactive: false,
     }).addTo(map);
     st.edgeLayer = L.polygon(rings, {
-      color: frameColor(), weight: 3, fill: false, interactive: false,
+      color: BOUNDARY, weight: 3, fill: false, interactive: false,
     }).addTo(map);
     if (!keepView) map.fitBounds(L.latLngBounds(rings.flat()), { padding: [30, 30] });
   }
@@ -557,8 +558,6 @@ const Ortho = (() => {
   function setFrameColor(v) {
     document.documentElement.style.setProperty("--frame", v);
     document.getElementById("frame-color").value = v;
-    if (st.edgeLayer) st.edgeLayer.setStyle({ color: v });
-    if (st.allBounds) st.allBounds.setStyle({ color: v });
   }
 
   /* ================= экспорт PNG ================= */
@@ -703,7 +702,7 @@ const Ortho = (() => {
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.fill(p, "evenodd");
       // тонкие границы всех районов поверх маски
-      ctx.strokeStyle = frameColor(); ctx.lineJoin = "round";
+      ctx.strokeStyle = BOUNDARY; ctx.lineJoin = "round";
       ctx.lineWidth = 1.2 * s; ctx.globalAlpha = 0.9;
       for (const f of App.rayony.features) {
         for (const ring of geomRings(f.geometry)) {

@@ -141,12 +141,13 @@ const Scheme = (() => {
       const name = f.properties.name;
       if (seen.has(name)) continue;
       seen.add(name);
-      const fit = fitLabel(name, f.geometry, st.projL, { min: 24, max: 24, weight: 600, allowSplit: false });
-      st.labels.push({ kind: "ao", text: name, x: fit.x, y: fit.y, size: 24, rot: 0, parts: [name], weight: 600 });
+      const text = AO_FULL[name] || name; // Новомосковский АО и Троицкий АО — полностью
+      const fit = fitLabel(text, f.geometry, st.projL, { min: 18, max: 18, weight: 600, allowSplit: false });
+      st.labels.push({ kind: "ao", text, x: fit.x, y: fit.y, size: 18, rot: 0, parts: [text], weight: 600 });
     }
     for (const f of rayInAo) {
       const text = fixYo(f.properties.name);
-      const fit = fitLabel(text, f.geometry, st.projR, { min: 10, max: 16, weight: 500 });
+      const fit = fitLabel(text, f.geometry, st.projR, { min: 11, max: 16, weight: 500 });
       st.labels.push({ kind: "ray", text: fit.parts.join("\n"), x: fit.x, y: fit.y, size: fit.size, rot: 0, parts: fit.parts, weight: 500 });
     }
     for (const f of App.rayony.features.filter(x => x.properties.ao !== d.ao)) {
@@ -171,12 +172,15 @@ const Scheme = (() => {
   function buildNaturePaths() {
     st.naturePathR = null;
     if (!App.nature || !st.projR) return;
-    let w = "", r = "";
+    let w = "", r = "", pk = "";
     for (const f of App.nature.features) {
       const p = ringsPath(f.geometry, st.projR);
-      if (f.properties.t === "w") w += p; else r += p;
+      const t = f.properties.t;
+      if (t === "w") w += p;
+      else if (t === "p") pk += p;
+      else r += p;
     }
-    st.naturePathR = { w, r };
+    st.naturePathR = { w, r, p: pk };
   }
 
   App.onNatureLoaded.push(() => {
@@ -216,6 +220,7 @@ const Scheme = (() => {
       const clipAO = el("clipPath", { id: "clipAO" }, svg);
       for (const p of st.paths.aoSelR) el("path", { d: p, "clip-rule": "evenodd" }, clipAO);
       const gN = el("g", { "clip-path": "url(#clipAO)" }, gR);
+      if (st.naturePathR.p) el("path", { d: st.naturePathR.p, fill: "var(--park)", stroke: "none" }, gN);
       if (st.naturePathR.w) el("path", { d: st.naturePathR.w, fill: "var(--wood)", stroke: "none" }, gN);
       if (st.naturePathR.r) el("path", { d: st.naturePathR.r, fill: "var(--water)", stroke: "none" }, gN);
     }
@@ -415,6 +420,7 @@ const Scheme = (() => {
       const clipAO = new Path2D();
       for (const p of st.paths.aoSelR) clipAO.addPath(P2(p));
       ctx.clip(clipAO, "evenodd");
+      if (st.naturePathR.p) { ctx.fillStyle = CSS.getPropertyValue("--park").trim(); ctx.fill(P2(st.naturePathR.p), "nonzero"); }
       if (st.naturePathR.w) { ctx.fillStyle = CSS.getPropertyValue("--wood").trim(); ctx.fill(P2(st.naturePathR.w), "nonzero"); }
       if (st.naturePathR.r) { ctx.fillStyle = CSS.getPropertyValue("--water").trim(); ctx.fill(P2(st.naturePathR.r), "nonzero"); }
       ctx.restore();
@@ -472,7 +478,7 @@ const Scheme = (() => {
     clone.setAttribute("width", W); clone.setAttribute("height", H);
     const CSS = getComputedStyle(document.documentElement);
     let src = new XMLSerializer().serializeToString(clone);
-    for (const v of ["pink-fill", "pink-stroke", "wood", "water"])
+    for (const v of ["pink-fill", "pink-stroke", "wood", "park", "water"])
       src = src.replaceAll(`var(--${v})`, CSS.getPropertyValue("--" + v).trim());
     downloadBlob(new Blob([src], { type: "image/svg+xml" }), fileBase() + ".svg");
   }

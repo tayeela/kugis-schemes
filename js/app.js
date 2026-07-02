@@ -236,12 +236,13 @@ document.querySelectorAll(".tab").forEach(btn => {
 
 /* ---------- загрузка данных ---------- */
 async function loadData() {
-  const [ok, ra, st] = await Promise.all([
+  const [ok, ra, st, rw] = await Promise.all([
     fetch("data/okruga.geojson").then(r => r.json()),
     fetch("data/rayony.geojson").then(r => r.json()),
     fetch("data/stations.geojson").then(r => r.json()),
+    fetch("data/railways.geojson").then(r => r.json()).catch(() => null),
   ]);
-  App.okruga = ok; App.rayony = ra; App.stations = st;
+  App.okruga = ok; App.rayony = ra; App.stations = st; App.railways = rw;
 
   // выпадающий список: округ → районы
   const sel = document.getElementById("district-select");

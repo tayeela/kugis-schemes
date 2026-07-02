@@ -35,9 +35,11 @@ const Ortho = (() => {
   const RAIL = { casing: 7.5, dash: 4.5, dashLen: 18 };
   const zf = z => Math.min(3, Math.max(0.15, Math.pow(2, z - 16)));
 
-  /* леса и вода из OSM поверх снимка (как в образце) */
-  const WOOD_FILL = "#26331d", WOOD_OP = 0.5;
-  const WATER_FILL = "#7fa8c8", WATER_OP = 0.55;
+  /* генерализованные ЖД-ходы (data/railways.geojson) -> [[lat,lng],...][] */
+  function railLines() {
+    if (!App.railways) return [];
+    return App.railways.features.map(f => f.geometry.coordinates.map(([x, y]) => [y, x]));
+  }
 
   let map = null, baseLayer = null, inited = false;
   const st = {
@@ -56,37 +58,20 @@ const Ortho = (() => {
 
   function createMap(center, zoom) {
     map = L.map("map", { center, zoom, maxZoom: 21, crs: crsOf(curBase) });
-    map.createPane("nature");
-    map.getPane("nature").style.zIndex = 340;
     map.createPane("roads");
     map.getPane("roads").style.zIndex = 350;
     map.createPane("mask");
     map.getPane("mask").style.zIndex = 380;
+    // канвас-рендереры: общегородские линии в SVG на больших зумах вешают браузер
+    st.roadsCanvas = L.canvas({ pane: "roads" });
+    st.boundsCanvas = L.canvas({ pane: "overlayPane" });
     const bm = BASEMAPS[curBase];
     baseLayer = L.tileLayer(bm.url, { maxZoom: 21, maxNativeZoom: bm.maxNativeZoom, attribution: bm.attr }).addTo(map);
-    addNatureLayers();
     addAllBoundaries();
     map.on("click", onMapClick);
     map.on("dblclick", onMapDblClick);
     map.on("zoomend", updateOsmWeights);
   }
-
-  /* --- леса/вода --- */
-  function addNatureLayers() {
-    if (!App.nature || !map) return;
-    if (st.natureLayers) { map.removeLayer(st.natureLayers.wood); map.removeLayer(st.natureLayers.water); }
-    const wood = [], water = [];
-    for (const f of App.nature.features) {
-      const rings = geomRings(f.geometry).map(r => r.map(([x, y]) => [y, x]));
-      (f.properties.t === "w" ? wood : water).push(rings);
-    }
-    const opts = { pane: "nature", stroke: false, fillRule: "nonzero", interactive: false };
-    st.natureLayers = {
-      wood: L.polygon(wood, Object.assign({ fillColor: WOOD_FILL, fillOpacity: WOOD_OP }, opts)).addTo(map),
-      water: L.polygon(water, Object.assign({ fillColor: WATER_FILL, fillOpacity: WATER_OP }, opts)).addTo(map),
-    };
-  }
-  App.onNatureLoaded.push(() => { if (inited) addNatureLayers(); });
 
   /* --- тонкие границы всех районов (над маской) --- */
   function addAllBoundaries() {
@@ -95,6 +80,7 @@ const Ortho = (() => {
     const lines = App.rayony.features.flatMap(f =>
       geomRings(f.geometry).map(r => r.map(([x, y]) => [y, x])));
     st.allBounds = L.polyline(lines, {
+      renderer: st.boundsCanvas,
       color: frameColor(), weight: 1.2, interactive: false, opacity: 0.9,
     }).addTo(map);
   }
@@ -221,6 +207,7 @@ const Ortho = (() => {
     const key = App.district.ao + "|" + App.district.name;
     removeOsmLayers();
     if (osmCache[key]) { st.osm = osmCache[key]; addOsmLayers(); osmStatus(osmSummary()); return; }
+    addOsmLayers(); // ЖД-ходы из файла показываем сразу, не дожидаясь Overpass
     osmStatus("Загрузка дорог из OSM…");
     const rings = geomOuterRings(App.district.feature.geometry);
     const [x0, y0, x1, y1] = ringsBBox(rings);
@@ -230,7 +217,6 @@ const Ortho = (() => {
     const bbox = `${(y0 - py).toFixed(5)},${(x0 - px).toFixed(5)},${(y1 + py).toFixed(5)},${(x1 + px).toFixed(5)}`;
     const q = `[out:json][timeout:90];(
       way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian)$"](${bbox});
-      way["railway"="rail"]["service"!~"."](${bbox});
     );out geom;`;
     let data = null, err = null;
     for (const ep of OVERPASS) {
@@ -241,17 +227,15 @@ const Ortho = (() => {
         break;
       } catch (e) { err = e; }
     }
-    if (!data) { osmStatus("Не удалось загрузить OSM: " + (err && err.message)); return; }
-    const roadsByClass = {}, railsRaw = [];
+    if (!data) { osmStatus("Дороги OSM не загрузились (" + (err && err.message) + ") — показаны только ЖД"); return; }
+    const roadsByClass = {};
     for (const el of data.elements || []) {
       if (!el.geometry) continue;
       const line = el.geometry.map(p => [p.lat, p.lon]);
       const hw = el.tags && el.tags.highway;
       if (hw && ROAD_W[hw]) (roadsByClass[hw] = roadsByClass[hw] || []).push(line);
-      else if (el.tags && el.tags.railway === "rail")
-        railsRaw.push({ line, usage: (el.tags.usage || "").trim() });
     }
-    st.osm = { roadsByClass, rails: generalizeRails(railsRaw) };
+    st.osm = { roadsByClass };
     osmCache[key] = st.osm;
     if (document.getElementById("osm-roads").checked) addOsmLayers();
     osmStatus(osmSummary());
@@ -259,80 +243,33 @@ const Ortho = (() => {
   function osmSummary() {
     if (!st.osm) return "";
     const nr = Object.values(st.osm.roadsByClass).reduce((p, c) => p + c.length, 0);
-    return `OSM: дорог ${nr}, линий ЖД ${st.osm.rails.length}`;
-  }
-
-  /* Генерализация ЖД: только магистральные ходы, параллельные пути сливаются в один */
-  function generalizeRails(items) {
-    if (!items.length) return [];
-    let arr = items;
-    if (items.some(r => r.usage === "main" || r.usage === "branch"))
-      arr = items.filter(r => r.usage === "main" || r.usage === "branch");
-    const M = 111320;
-    const lineLen = line => {
-      let s = 0;
-      for (let i = 1; i < line.length; i++) {
-        const kx = Math.cos(line[i][0] * Math.PI / 180) * M;
-        s += Math.hypot((line[i][1] - line[i - 1][1]) * kx, (line[i][0] - line[i - 1][0]) * M);
-      }
-      return s;
-    };
-    const ptSegDist = (p, a, b) => {
-      const kx = Math.cos(p[0] * Math.PI / 180) * M;
-      const px = p[1] * kx, py = p[0] * M;
-      let ax = a[1] * kx, ay = a[0] * M, bx = b[1] * kx, by = b[0] * M;
-      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
-      let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
-      t = Math.max(0, Math.min(1, t));
-      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-    };
-    const ptLineDist = (p, line) => {
-      let d = Infinity;
-      for (let i = 1; i < line.length; i++) d = Math.min(d, ptSegDist(p, line[i - 1], line[i]));
-      return d;
-    };
-    const sample = (line, n) => {
-      const out = [];
-      for (let i = 0; i < n; i++) out.push(line[Math.round(i * (line.length - 1) / (n - 1))]);
-      return out;
-    };
-    arr = [...arr].sort((a, b) => lineLen(b.line) - lineLen(a.line));
-    const kept = [];
-    for (const r of arr) {
-      const pts = sample(r.line, Math.min(7, r.line.length));
-      let dup = false;
-      for (const k of kept) {
-        const ds = pts.map(p => ptLineDist(p, k.line)).sort((x, y) => x - y);
-        if (ds[Math.floor(ds.length / 2)] < 35) { dup = true; break; } // медиана < 35 м — тот же ход
-      }
-      if (!dup) kept.push(r);
-    }
-    return kept.map(r => r.line);
+    return `OSM: дорог ${nr} · ЖД-ходов ${railLines().length}`;
   }
 
   function addOsmLayers() {
-    if (!st.osm || !map) return;
+    if (!map) return;
     removeOsmLayers(true);
     const f = zf(map.getZoom());
     const layers = { roads: [], railCasing: null, railDash: null };
     // порядок добавления в pane = порядок отрисовки: мелкие → крупные → ЖД
     const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
     for (const cls of order) {
-      const lines = st.osm.roadsByClass[cls];
+      const lines = st.osm && st.osm.roadsByClass[cls];
       if (!lines || !lines.length) continue;
       const lay = L.polyline(lines, {
-        pane: "roads", color: ROAD_COLOR, weight: ROAD_W[cls] * f,
+        renderer: st.roadsCanvas, color: ROAD_COLOR, weight: ROAD_W[cls] * f,
         lineCap: "round", lineJoin: "round", interactive: false, opacity: 1,
       }).addTo(map);
       layers.roads.push({ layer: lay, base: ROAD_W[cls] });
     }
-    if (st.osm.rails.length) {
-      layers.railCasing = L.polyline(st.osm.rails, {
-        pane: "roads", color: "#1a1a1a", weight: RAIL.casing * f,
+    const rl = railLines();
+    if (rl.length) {
+      layers.railCasing = L.polyline(rl, {
+        renderer: st.roadsCanvas, color: "#1a1a1a", weight: RAIL.casing * f,
         lineCap: "butt", interactive: false,
       }).addTo(map);
-      layers.railDash = L.polyline(st.osm.rails, {
-        pane: "roads", color: "#ffffff", weight: RAIL.dash * f,
+      layers.railDash = L.polyline(rl, {
+        renderer: st.roadsCanvas, color: "#ffffff", weight: RAIL.dash * f,
         dashArray: `${RAIL.dashLen * f} ${RAIL.dashLen * f}`, lineCap: "butt", interactive: false,
       }).addTo(map);
     }
@@ -727,42 +664,27 @@ const Ortho = (() => {
       ctx.stroke();
     };
 
-    // леса и вода
-    if (App.nature) {
-      const paths = { w: new Path2D(), r: new Path2D() };
-      for (const f of App.nature.features) {
-        const p = paths[f.properties.t];
-        for (const ring of geomRings(f.geometry)) {
-          ring.forEach(([lng, lat], i) => {
-            const [x, y] = P([lat, lng]);
-            i ? p.lineTo(x, y) : p.moveTo(x, y);
-          });
-          p.closePath();
+    // дороги и ЖД (если включены)
+    if (document.getElementById("osm-roads").checked) {
+      const f = zf(zE);
+      if (st.osm) {
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.strokeStyle = ROAD_COLOR;
+        const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
+        for (const cls of order) {
+          const lines = st.osm.roadsByClass[cls];
+          if (!lines) continue;
+          ctx.lineWidth = ROAD_W[cls] * f;
+          for (const line of lines) strokeLine(line);
         }
       }
-      ctx.globalAlpha = WOOD_OP; ctx.fillStyle = WOOD_FILL; ctx.fill(paths.w, "nonzero");
-      ctx.globalAlpha = WATER_OP; ctx.fillStyle = WATER_FILL; ctx.fill(paths.r, "nonzero");
-      ctx.globalAlpha = 1;
-    }
-
-    // дороги и ЖД (если включены)
-    if (st.osm && document.getElementById("osm-roads").checked) {
-      const f = zf(zE);
-      ctx.lineCap = "round"; ctx.lineJoin = "round";
-      ctx.strokeStyle = ROAD_COLOR;
-      const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
-      for (const cls of order) {
-        const lines = st.osm.roadsByClass[cls];
-        if (!lines) continue;
-        ctx.lineWidth = ROAD_W[cls] * f;
-        for (const line of lines) strokeLine(line);
-      }
-      ctx.lineCap = "butt";
+      const rl = railLines();
+      ctx.lineCap = "butt"; ctx.lineJoin = "round";
       ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = RAIL.casing * f;
-      for (const line of st.osm.rails) strokeLine(line);
+      for (const line of rl) strokeLine(line);
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = RAIL.dash * f;
       ctx.setLineDash([RAIL.dashLen * f, RAIL.dashLen * f]);
-      for (const line of st.osm.rails) strokeLine(line);
+      for (const line of rl) strokeLine(line);
       ctx.setLineDash([]);
     }
 

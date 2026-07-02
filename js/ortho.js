@@ -35,6 +35,10 @@ const Ortho = (() => {
   const RAIL = { casing: 7.5, dash: 4.5, dashLen: 18 };
   const zf = z => Math.min(3, Math.max(0.15, Math.pow(2, z - 16)));
 
+  /* леса и вода из OSM поверх снимка (как в образце) */
+  const WOOD_FILL = "#26331d", WOOD_OP = 0.5;
+  const WATER_FILL = "#7fa8c8", WATER_OP = 0.55;
+
   let map = null, baseLayer = null, inited = false;
   const st = {
     maskLayer: null, edgeLayer: null,
@@ -52,13 +56,47 @@ const Ortho = (() => {
 
   function createMap(center, zoom) {
     map = L.map("map", { center, zoom, maxZoom: 21, crs: crsOf(curBase) });
+    map.createPane("nature");
+    map.getPane("nature").style.zIndex = 340;
     map.createPane("roads");
     map.getPane("roads").style.zIndex = 350;
+    map.createPane("mask");
+    map.getPane("mask").style.zIndex = 380;
     const bm = BASEMAPS[curBase];
     baseLayer = L.tileLayer(bm.url, { maxZoom: 21, maxNativeZoom: bm.maxNativeZoom, attribution: bm.attr }).addTo(map);
+    addNatureLayers();
+    addAllBoundaries();
     map.on("click", onMapClick);
     map.on("dblclick", onMapDblClick);
     map.on("zoomend", updateOsmWeights);
+  }
+
+  /* --- леса/вода --- */
+  function addNatureLayers() {
+    if (!App.nature || !map) return;
+    if (st.natureLayers) { map.removeLayer(st.natureLayers.wood); map.removeLayer(st.natureLayers.water); }
+    const wood = [], water = [];
+    for (const f of App.nature.features) {
+      const rings = geomRings(f.geometry).map(r => r.map(([x, y]) => [y, x]));
+      (f.properties.t === "w" ? wood : water).push(rings);
+    }
+    const opts = { pane: "nature", stroke: false, fillRule: "nonzero", interactive: false };
+    st.natureLayers = {
+      wood: L.polygon(wood, Object.assign({ fillColor: WOOD_FILL, fillOpacity: WOOD_OP }, opts)).addTo(map),
+      water: L.polygon(water, Object.assign({ fillColor: WATER_FILL, fillOpacity: WATER_OP }, opts)).addTo(map),
+    };
+  }
+  App.onNatureLoaded.push(() => { if (inited) addNatureLayers(); });
+
+  /* --- тонкие границы всех районов (над маской) --- */
+  function addAllBoundaries() {
+    if (!map) return;
+    if (st.allBounds) map.removeLayer(st.allBounds);
+    const lines = App.rayony.features.flatMap(f =>
+      geomRings(f.geometry).map(r => r.map(([x, y]) => [y, x])));
+    st.allBounds = L.polyline(lines, {
+      color: frameColor(), weight: 1.2, interactive: false, opacity: 0.9,
+    }).addTo(map);
   }
 
   function ensureMap() {
@@ -66,7 +104,10 @@ const Ortho = (() => {
     inited = true;
     createMap([55.75, 37.62], 11);
     if (App.district) applyDistrict(App.district);
-    if (!restore() && App.district) autoAddStations(App.district);
+    if (!restore() && App.district) {
+      autoAddStations(App.district);
+      autoAddDistrictLabels(App.district);
+    }
     if (document.getElementById("osm-roads").checked) loadOSM();
   }
   function onShow() { ensureMap(); setTimeout(() => map.invalidateSize(), 50); }
@@ -84,7 +125,7 @@ const Ortho = (() => {
       cancelDraw();
       const c = map.getCenter(), z = map.getZoom();
       map.remove();
-      createMap(c, z);
+      createMap(c, z);   // nature и границы районов пересоздаются внутри
       if (App.district) applyDistrict(App.district, true);
       addOsmLayers();
       if (st.territory) st.territory.layer.addTo(map);
@@ -103,7 +144,7 @@ const Ortho = (() => {
     const rings = geomRings(d.feature.geometry).map(r => r.map(([x, y]) => [y, x]));
     const world = [[85, -180], [85, 180], [-85, 180], [-85, -180]];
     st.maskLayer = L.polygon([world, ...rings], {
-      stroke: false, fillColor: "#fff", fillOpacity: 0.55, interactive: false,
+      pane: "mask", stroke: false, fillColor: "#fff", fillOpacity: 0.55, interactive: false,
     }).addTo(map);
     st.edgeLayer = L.polygon(rings, {
       color: frameColor(), weight: 3, fill: false, interactive: false,
@@ -118,7 +159,7 @@ const Ortho = (() => {
     removeOsmLayers();
     applyDistrict(d);
     if (saved && saved.district === d.ao + "|" + d.name) restoreState(saved);
-    else autoAddStations(d);
+    else { autoAddStations(d); autoAddDistrictLabels(d); }
     if (document.getElementById("osm-roads").checked) loadOSM();
   });
 
@@ -127,6 +168,27 @@ const Ortho = (() => {
     const [x0, y0, x1, y1] = ringsBBox(geomOuterRings(d.feature.geometry));
     const px = (x1 - x0) * 0.2, py = (y1 - y0) * 0.2;
     addStationsInBounds(L.latLngBounds([y0 - py, x0 - px], [y1 + py, x1 + px]), true);
+  }
+
+  /* подписи выбранного района и соседей (как в образце: НАО\nФИЛИМОНКОВСКИЙ) */
+  function geoPole(geom) {
+    const ring = largestOuterRing(geom);
+    const kx = Math.cos(ring[0][1] * Math.PI / 180);
+    const pole = poleOfInaccessibility(ring.map(([x, y]) => [x * kx, y]), 0.0003);
+    return { lat: pole.y, lng: pole.x / kx };
+  }
+  function autoAddDistrictLabels(d) {
+    const [x0, y0, x1, y1] = ringsBBox(geomOuterRings(d.feature.geometry));
+    const px = (x1 - x0) * 0.25, py = (y1 - y0) * 0.25;
+    for (const f of App.rayony.features) {
+      const [a0, b0, a1, b1] = ringsBBox(geomOuterRings(f.geometry));
+      if (a1 < x0 - px || a0 > x1 + px || b1 < y0 - py || b0 > y1 + py) continue;
+      const isSel = f === d.feature;
+      const name = fixYo(f.properties.name);
+      const text = (isSel || f.properties.ao !== d.ao) ? f.properties.ao + "\n" + name : name;
+      addAnnotation({ type: "district", latlng: geoPole(f.geometry), text, size: isSel ? 24 : 17 });
+    }
+    selectAnn(null);
   }
 
   function addStationsInBounds(b, quiet) {
@@ -508,6 +570,7 @@ const Ortho = (() => {
     document.documentElement.style.setProperty("--frame", v);
     document.getElementById("frame-color").value = v;
     if (st.edgeLayer) st.edgeLayer.setStyle({ color: v });
+    if (st.allBounds) st.allBounds.setStyle({ color: v });
   }
 
   /* ================= экспорт PNG ================= */
@@ -598,6 +661,24 @@ const Ortho = (() => {
       ctx.stroke();
     };
 
+    // леса и вода
+    if (App.nature) {
+      const paths = { w: new Path2D(), r: new Path2D() };
+      for (const f of App.nature.features) {
+        const p = paths[f.properties.t];
+        for (const ring of geomRings(f.geometry)) {
+          ring.forEach(([lng, lat], i) => {
+            const [x, y] = P([lat, lng]);
+            i ? p.lineTo(x, y) : p.moveTo(x, y);
+          });
+          p.closePath();
+        }
+      }
+      ctx.globalAlpha = WOOD_OP; ctx.fillStyle = WOOD_FILL; ctx.fill(paths.w, "nonzero");
+      ctx.globalAlpha = WATER_OP; ctx.fillStyle = WATER_FILL; ctx.fill(paths.r, "nonzero");
+      ctx.globalAlpha = 1;
+    }
+
     // дороги и ЖД (если включены)
     if (st.osm && document.getElementById("osm-roads").checked) {
       const f = zf(zE);
@@ -633,7 +714,22 @@ const Ortho = (() => {
       }
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.fill(p, "evenodd");
-      ctx.strokeStyle = frameColor(); ctx.lineWidth = 3 * s; ctx.lineJoin = "round";
+      // тонкие границы всех районов поверх маски
+      ctx.strokeStyle = frameColor(); ctx.lineJoin = "round";
+      ctx.lineWidth = 1.2 * s; ctx.globalAlpha = 0.9;
+      for (const f of App.rayony.features) {
+        for (const ring of geomRings(f.geometry)) {
+          ctx.beginPath();
+          ring.forEach(([lng, lat], i) => {
+            const [x, y] = P([lat, lng]);
+            i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+          });
+          ctx.closePath(); ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+      // граница выбранного района
+      ctx.lineWidth = 3 * s;
       for (const ring of rings) {
         ctx.beginPath();
         ring.forEach(([lng, lat], i) => {

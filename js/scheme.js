@@ -88,7 +88,7 @@ const Scheme = (() => {
       const name = f.properties.name;
       if (seen.has(name)) continue;
       seen.add(name);
-      const text = AO_FULL[name] || name;
+      const text = name; // короткие коды, как в образце (НАО, ТАО)
       // позиция — полюс недоступности, кегль единый для всех округов
       const fit = fitLabel(text, f.geometry, st.projL,
         { min: 24, max: 24, weight: 600, allowSplit: false });
@@ -101,11 +101,71 @@ const Scheme = (() => {
       return { text, x: fit.x, y: fit.y, size: fit.size, parts: fit.parts };
     });
 
+    // соседние крупные районы других округов, попавшие в правое панно
+    for (const f of App.rayony.features.filter(x => x.properties.ao !== d.ao)) {
+      const ring = largestOuterRing(f.geometry).map(st.projR);
+      let a = 0;
+      for (let i = 0; i < ring.length - 1; i++) a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+      if (Math.abs(a / 2) < 4500) continue; // мелкие на этом масштабе не подписываем
+      const text = fixYo(f.properties.name);
+      const fit = fitLabel(text, f.geometry, st.projR, { min: 10, max: 15, weight: 500 });
+      if (fit.x < 750 || fit.x > 1585 || fit.y < 20 || fit.y > H - 20) continue;
+      st.rayLabels.push({ text, x: fit.x, y: fit.y, size: fit.size, parts: fit.parts });
+    }
+    resolveOverlaps(st.aoLabels, 600);
+    resolveOverlaps(st.rayLabels, 500);
+
     const cD = featureCentroid(d.feature);
     st.markerL = { x: st.projL(cD)[0], y: st.projL(cD)[1] };
     st.markerR = { x: st.projR(cD)[0], y: st.projR(cD)[1] };
     st.callout = { x: W / 2, y: H - 90, w: 460, h: 96 };
+    buildNaturePaths();
     st.ready = true;
+  }
+
+  /* кэш SVG-путей зелени и воды в проекции правого панно (пересчёт только при смене района) */
+  function buildNaturePaths() {
+    st.naturePathR = null;
+    if (!App.nature || !st.projR) return;
+    let w = "", r = "";
+    for (const f of App.nature.features) {
+      const p = ringsPath(f.geometry, st.projR);
+      if (f.properties.t === "w") w += p; else r += p;
+    }
+    st.naturePathR = { w, r };
+  }
+
+  App.onNatureLoaded.push(() => {
+    if (st.ready) { buildNaturePaths(); render(); }
+  });
+
+  /* раздвижка пересекающихся подписей (по оси меньшего перекрытия) */
+  function resolveOverlaps(labels, weight) {
+    const box = l => {
+      measureCtx.font = `${weight} ${l.size}px ${App.FONT}`;
+      const w = Math.max(...l.parts.map(p => measureCtx.measureText(p).width)) + 6;
+      const h = l.size * 1.25 * l.parts.length + 4;
+      return { x0: l.x - w / 2, y0: l.y - h / 2, x1: l.x + w / 2, y1: l.y + h / 2 };
+    };
+    for (let it = 0; it < 30; it++) {
+      let moved = false;
+      for (let i = 0; i < labels.length; i++)
+        for (let j = i + 1; j < labels.length; j++) {
+          const a = box(labels[i]), b = box(labels[j]);
+          const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+          const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+          if (ox <= 0 || oy <= 0) continue;
+          moved = true;
+          if (ox < oy) {
+            const dir = labels[i].x <= labels[j].x ? 1 : -1;
+            labels[i].x -= dir * (ox / 2 + 1); labels[j].x += dir * (ox / 2 + 1);
+          } else {
+            const dir = labels[i].y <= labels[j].y ? 1 : -1;
+            labels[i].y -= dir * (oy / 2 + 1); labels[j].y += dir * (oy / 2 + 1);
+          }
+        }
+      if (!moved) break;
+    }
   }
 
   /* ---- отрисовка SVG ---- */
@@ -129,23 +189,27 @@ const Scheme = (() => {
     for (const f of App.okruga.features.filter(x => x.properties.name === d.ao))
       el("path", { d: ringsPath(f.geometry, st.projL), fill: "none", stroke: "var(--pink-stroke)", "stroke-width": 3 }, gL);
 
-    // ПРАВОЕ ПАННО: соседние районы бледно + округ
+    // ПРАВОЕ ПАННО: белые районы + зелень/вода из OSM + границы + розовый район
     const gR = el("g", {}, svg);
     const clip = el("clipPath", { id: "clipR" }, svg);
     el("rect", { x: 740, y: 10, width: 850, height: H - 20 }, clip);
     gR.setAttribute("clip-path", "url(#clipR)");
+    for (const f of App.rayony.features)
+      el("path", { d: ringsPath(f.geometry, st.projR), fill: "#fff", stroke: "none", "fill-rule": "evenodd" }, gR);
+    if (st.naturePathR) {
+      if (st.naturePathR.w) el("path", { d: st.naturePathR.w, fill: "var(--wood)", stroke: "none" }, gR);
+      if (st.naturePathR.r) el("path", { d: st.naturePathR.r, fill: "var(--water)", stroke: "none" }, gR);
+    }
     for (const f of App.rayony.features.filter(x => x.properties.ao !== d.ao))
-      el("path", { d: ringsPath(f.geometry, st.projR), fill: "none", stroke: "#bbb", "stroke-width": 1 }, gR);
-    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao)) {
-      const isSel = f.properties.name === d.name;
+      el("path", { d: ringsPath(f.geometry, st.projR), fill: "none", stroke: "#1a1a1a", "stroke-width": 0.9 }, gR);
+    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao))
+      el("path", { d: ringsPath(f.geometry, st.projR), fill: "none", stroke: "#1a1a1a", "stroke-width": 1.6 }, gR);
+    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao && x.properties.name === d.name))
       el("path", {
         d: ringsPath(f.geometry, st.projR),
-        fill: isSel ? "var(--pink-fill)" : "#fff",
-        stroke: "#1a1a1a", "stroke-width": 1.4, "fill-rule": "evenodd",
+        fill: "var(--pink-fill)", "fill-opacity": 0.55,
+        stroke: "var(--pink-stroke)", "stroke-width": 3.5, "fill-rule": "evenodd",
       }, gR);
-    }
-    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao && x.properties.name === d.name))
-      el("path", { d: ringsPath(f.geometry, st.projR), fill: "none", stroke: "var(--pink-stroke)", "stroke-width": 3.5 }, gR);
 
     // выноска + пунктирные линии к точкам
     const c = st.callout;
@@ -289,15 +353,23 @@ const Scheme = (() => {
     // правое панно (клип)
     ctx.save();
     ctx.beginPath(); ctx.rect(740, 10, 850, H - 20); ctx.clip();
-    for (const f of App.rayony.features.filter(x => x.properties.ao !== d.ao))
-      stroke(path(f.geometry, st.projR), "#bbb", 1);
-    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao)) {
-      const p = path(f.geometry, st.projR);
-      ctx.fillStyle = f.properties.name === d.name ? PINK : "#fff";
-      ctx.fill(p, "evenodd"); stroke(p, "#1a1a1a", 1.4);
+    for (const f of App.rayony.features) {
+      ctx.fillStyle = "#fff";
+      ctx.fill(path(f.geometry, st.projR), "evenodd");
     }
-    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao && x.properties.name === d.name))
-      stroke(path(f.geometry, st.projR), PSTROKE, 3.5);
+    if (st.naturePathR) {
+      if (st.naturePathR.w) { ctx.fillStyle = CSS.getPropertyValue("--wood").trim(); ctx.fill(new Path2D(st.naturePathR.w), "nonzero"); }
+      if (st.naturePathR.r) { ctx.fillStyle = CSS.getPropertyValue("--water").trim(); ctx.fill(new Path2D(st.naturePathR.r), "nonzero"); }
+    }
+    for (const f of App.rayony.features.filter(x => x.properties.ao !== d.ao))
+      stroke(path(f.geometry, st.projR), "#1a1a1a", 0.9);
+    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao))
+      stroke(path(f.geometry, st.projR), "#1a1a1a", 1.6);
+    for (const f of App.rayony.features.filter(x => x.properties.ao === d.ao && x.properties.name === d.name)) {
+      const p = path(f.geometry, st.projR);
+      ctx.globalAlpha = 0.55; ctx.fillStyle = PINK; ctx.fill(p, "evenodd"); ctx.globalAlpha = 1;
+      stroke(p, PSTROKE, 3.5);
+    }
     ctx.restore();
 
     // выноска и линии
@@ -341,8 +413,8 @@ const Scheme = (() => {
     // заменить CSS-переменные на литеральные цвета
     const CSS = getComputedStyle(document.documentElement);
     let src = new XMLSerializer().serializeToString(clone);
-    src = src.replaceAll("var(--pink-fill)", CSS.getPropertyValue("--pink-fill").trim());
-    src = src.replaceAll("var(--pink-stroke)", CSS.getPropertyValue("--pink-stroke").trim());
+    for (const v of ["pink-fill", "pink-stroke", "wood", "water"])
+      src = src.replaceAll(`var(--${v})`, CSS.getPropertyValue("--" + v).trim());
     downloadBlob(new Blob([src], { type: "image/svg+xml" }), fileBase() + ".svg");
   }
 

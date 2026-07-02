@@ -1,8 +1,10 @@
 :root {
-  --pink-fill: #f8c9e2;
-  --pink-stroke: #ec3ea0;
+  --pink-fill: #fb9fd1;
+  --pink-stroke: #f0329b;
   --magenta: #ff00dd;
   --frame: #c49a6c;
+  --wood: #a6c09b;
+  --water: #a9cbe8;
   --font: "Century Gothic", "CenturyGothic", "Didact Gothic", Arial, sans-serif;
   --ui-bg: #f4f5f7;
   --ui-border: #d9dce1;

@@ -6,9 +6,24 @@ const App = {
   rayony: null,     // FeatureCollection {ao, name}
   stations: null,   // FeatureCollection {name, line}
   district: null,   // выбранный район {ao, name, feature}
+  nature: null,     // FeatureCollection {t: "w"|"r"} — леса и вода из OSM
   onDistrictChange: [],
+  onNatureLoaded: [],
   FONT: '"Century Gothic","CenturyGothic","Didact Gothic",Arial,sans-serif',
 };
+
+function loadNature() {
+  if (App._naturePromise) return App._naturePromise;
+  App._naturePromise = fetch("data/nature.geojson")
+    .then(r => r.json())
+    .then(n => {
+      App.nature = n;
+      App.onNatureLoaded.forEach(cb => cb(n));
+      return n;
+    })
+    .catch(e => { toast("Не загрузился слой зелени/воды: " + e.message, 5000); });
+  return App._naturePromise;
+}
 
 /* Известные написания с «ё» (в данных «ё» отсутствует) */
 const YO_FIX = {
@@ -196,6 +211,7 @@ async function loadData() {
   }
   sel.addEventListener("change", () => selectDistrict(sel.value));
   selectDistrict("САО|Савеловский", true);
+  loadNature();
 }
 
 function selectDistrict(key, init) {

@@ -496,6 +496,36 @@ const Scheme = (() => {
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
+  /* ---- настраиваемые цвета схемы (CSS-переменные + localStorage) ---- */
+  (function schemeColorsInit() {
+    const KEY = "kugis-scheme-colors";
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
+    const inputs = [...document.querySelectorAll(".scheme-color")];
+    const defaults = {};
+    for (const inp of inputs) {
+      const v = inp.dataset.var;
+      defaults[v] = inp.value;
+      if (saved[v]) {
+        document.documentElement.style.setProperty("--" + v, saved[v]);
+        inp.value = saved[v];
+      }
+      inp.addEventListener("input", () => {
+        document.documentElement.style.setProperty("--" + v, inp.value);
+        saved[v] = inp.value;
+        try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+      });
+    }
+    document.getElementById("scheme-colors-reset").addEventListener("click", () => {
+      saved = {};
+      try { localStorage.removeItem(KEY); } catch (e) {}
+      for (const inp of inputs) {
+        inp.value = defaults[inp.dataset.var];
+        document.documentElement.style.setProperty("--" + inp.dataset.var, defaults[inp.dataset.var]);
+      }
+    });
+  })();
+
   /* ---- события ---- */
   App.onDistrictChange.push(d => {
     document.getElementById("scheme-name").value = d.display;

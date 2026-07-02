@@ -42,6 +42,15 @@
       </div>
       <p class="hint">Подписи, точку и выноску можно перетаскивать мышью. Клик по подписи — редактирование.</p>
       <div class="group">
+        <b>Цвета</b>
+        <div class="field inline"><label>Заливка выделения</label><input type="color" class="scheme-color" data-var="pink-fill" value="#fb9fd1"></div>
+        <div class="field inline"><label>Обводка выделения</label><input type="color" class="scheme-color" data-var="pink-stroke" value="#f0329b"></div>
+        <div class="field inline"><label>Лес</label><input type="color" class="scheme-color" data-var="wood" value="#a6c09b"></div>
+        <div class="field inline"><label>Парк</label><input type="color" class="scheme-color" data-var="park" value="#c5d8ae"></div>
+        <div class="field inline"><label>Вода</label><input type="color" class="scheme-color" data-var="water" value="#a9cbe8"></div>
+        <button class="btn" id="scheme-colors-reset">Сбросить цвета</button>
+      </div>
+      <div class="group">
         <b>Подписи</b>
         <button class="btn" id="scheme-add-label">Добавить подпись</button>
         <div id="scheme-props" hidden>
@@ -92,6 +101,21 @@
         </select>
         <label class="check"><input type="checkbox" id="osm-roads" checked> Дороги и ЖД из OSM</label>
         <div class="hint" id="osm-status"></div>
+      </div>
+      <div class="group">
+        <b>Слои и стиль</b>
+        <label class="check"><input type="checkbox" id="st-rails" checked> Железные дороги</label>
+        <label class="check"><input type="checkbox" id="st-bounds" checked> Границы районов</label>
+        <div class="field"><label>Осветление вне района <span id="st-mask-val">55</span>%</label>
+          <input type="range" id="st-mask" min="0" max="90" step="5" value="55"></div>
+        <div class="field"><label>Толщина линий <span id="st-scale-val">100</span>%</label>
+          <input type="range" id="st-scale" min="40" max="220" step="10" value="100"></div>
+        <div class="field inline"><label>Цвет дорог</label>
+          <input type="color" id="st-road" value="#f3ecd2"></div>
+        <div class="field inline"><label>Территория</label>
+          <input type="color" id="st-terr" value="#ff00dd">
+          <input type="range" id="st-terr-w" min="2" max="10" step="0.5" value="4"></div>
+        <button class="btn" id="st-reset">Сбросить стиль</button>
       </div>
       <div class="group">
         <b>Территория</b>

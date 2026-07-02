@@ -54,6 +54,16 @@ const Ortho = (() => {
   };
   const osmCache = {};        // districtKey -> данные Overpass
 
+  /* ================= настраиваемый стиль векторных слоёв ================= */
+  const STYLE_KEY = "kugis-ortho-style";
+  const STYLE_DEFAULTS = {
+    maskOp: 55, roadColor: ROAD_COLOR, lineScale: 100,
+    railsOn: true, boundsOn: true, terrColor: "#ff00dd", terrW: 4,
+  };
+  st.style = Object.assign({}, STYLE_DEFAULTS);
+  try { Object.assign(st.style, JSON.parse(localStorage.getItem(STYLE_KEY)) || {}); } catch (e) {}
+  const lineMul = () => st.style.lineScale / 100;
+
   /* ================= карта ================= */
   function crsOf(id) { return BASEMAPS[id].crs === "3395" ? L.CRS.EPSG3395 : L.CRS.EPSG3857; }
 
@@ -77,7 +87,8 @@ const Ortho = (() => {
   /* --- тонкие границы всех районов (над маской) --- */
   function addAllBoundaries() {
     if (!map) return;
-    if (st.allBounds) map.removeLayer(st.allBounds);
+    if (st.allBounds) { map.removeLayer(st.allBounds); st.allBounds = null; }
+    if (!st.style.boundsOn) return;
     const lines = App.rayony.features.flatMap(f =>
       geomRings(f.geometry).map(r => r.map(([x, y]) => [y, x])));
     st.allBounds = L.polyline(lines, {
@@ -158,7 +169,7 @@ const Ortho = (() => {
     const rings = geomRings(d.feature.geometry).map(r => r.map(([x, y]) => [y, x]));
     const world = [[85, -180], [85, 180], [-85, 180], [-85, -180]];
     st.maskLayer = L.polygon([world, ...rings], {
-      pane: "mask", stroke: false, fillColor: "#fff", fillOpacity: 0.55, interactive: false,
+      pane: "mask", stroke: false, fillColor: "#fff", fillOpacity: st.style.maskOp / 100, interactive: false,
     }).addTo(map);
     st.edgeLayer = L.polygon(rings, {
       color: BOUNDARY, weight: 3, fill: false, interactive: false,
@@ -277,7 +288,7 @@ const Ortho = (() => {
   function addOsmLayers() {
     if (!map) return;
     removeOsmLayers(true);
-    const f = zf(map.getZoom());
+    const f = zf(map.getZoom()) * lineMul();
     const layers = { roads: [], railCasing: null, railDash: null };
     // порядок добавления в pane = порядок отрисовки: мелкие → крупные → ЖД
     const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
@@ -285,12 +296,12 @@ const Ortho = (() => {
       const lines = st.osm && st.osm.roadsByClass[cls];
       if (!lines || !lines.length) continue;
       const lay = L.polyline(lines, {
-        renderer: st.roadsCanvas, color: ROAD_COLOR, weight: ROAD_W[cls] * f,
+        renderer: st.roadsCanvas, color: st.style.roadColor, weight: ROAD_W[cls] * f,
         lineCap: "round", lineJoin: "round", interactive: false, opacity: 1,
       }).addTo(map);
       layers.roads.push({ layer: lay, base: ROAD_W[cls] });
     }
-    const rl = railLines();
+    const rl = st.style.railsOn ? railLines() : [];
     if (rl.length) {
       layers.railCasing = L.polyline(rl, {
         renderer: st.roadsCanvas, color: "#1a1a1a", weight: RAIL.casing * f,
@@ -314,7 +325,7 @@ const Ortho = (() => {
   }
   function updateOsmWeights() {
     if (!st.osmLayers) return;
-    const f = zf(map.getZoom());
+    const f = zf(map.getZoom()) * lineMul();
     st.osmLayers.roads.forEach(r => r.layer.setStyle({ weight: r.base * f }));
     if (st.osmLayers.railCasing) st.osmLayers.railCasing.setStyle({ weight: RAIL.casing * f });
     if (st.osmLayers.railDash) st.osmLayers.railDash.setStyle({
@@ -326,7 +337,7 @@ const Ortho = (() => {
   function startDraw() {
     ensureMap();
     cancelDraw();
-    st.drawing = { pts: [], line: L.polyline([], { color: magenta(), weight: 3, dashArray: "6 4" }), dots: [] };
+    st.drawing = { pts: [], line: L.polyline([], { color: st.style.terrColor, weight: 3, dashArray: "6 4" }), dots: [] };
     st.drawing.line.addTo(map);
     map.doubleClickZoom.disable();
     map.getContainer().style.cursor = "crosshair";
@@ -347,7 +358,7 @@ const Ortho = (() => {
     if (st.drawing) {
       st.drawing.pts.push([e.latlng.lat, e.latlng.lng]);
       st.drawing.line.setLatLngs(st.drawing.pts);
-      st.drawing.dots.push(L.circleMarker(e.latlng, { radius: 4, color: magenta(), fillOpacity: 1 }).addTo(map));
+      st.drawing.dots.push(L.circleMarker(e.latlng, { radius: 4, color: st.style.terrColor, fillOpacity: 1 }).addTo(map));
       return;
     }
     selectAnn(null);
@@ -367,7 +378,7 @@ const Ortho = (() => {
     clearTerritory();
     const areaM2 = sphericalAreaM2(latlngs.map(([la, ln]) => [ln, la]));
     const layer = L.polygon(latlngs, {
-      color: magenta(), weight: 4, fill: false, lineJoin: "round", interactive: false,
+      color: st.style.terrColor, weight: st.style.terrW, fill: false, lineJoin: "round", interactive: false,
     }).addTo(map);
     st.territory = { latlngs, layer, areaM2 };
     document.getElementById("ortho-area").textContent = "Площадь: " + formatHa(areaM2);
@@ -692,10 +703,10 @@ const Ortho = (() => {
 
     // дороги и ЖД (если включены)
     if (document.getElementById("osm-roads").checked) {
-      const f = zf(zE);
+      const f = zf(zE) * lineMul();
       if (st.osm) {
         ctx.lineCap = "round"; ctx.lineJoin = "round";
-        ctx.strokeStyle = ROAD_COLOR;
+        ctx.strokeStyle = st.style.roadColor;
         const order = ["pedestrian", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
         for (const cls of order) {
           const lines = st.osm.roadsByClass[cls];
@@ -704,7 +715,7 @@ const Ortho = (() => {
           for (const line of lines) strokeLine(line);
         }
       }
-      const rl = railLines();
+      const rl = st.style.railsOn ? railLines() : [];
       ctx.lineCap = "butt"; ctx.lineJoin = "round";
       ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = RAIL.casing * f;
       for (const line of rl) strokeLine(line);
@@ -726,22 +737,24 @@ const Ortho = (() => {
         });
         p.closePath();
       }
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillStyle = `rgba(255,255,255,${st.style.maskOp / 100})`;
       ctx.fill(p, "evenodd");
       // тонкие границы всех районов поверх маски
-      ctx.strokeStyle = BOUNDARY; ctx.lineJoin = "round";
-      ctx.lineWidth = 1.2 * s; ctx.globalAlpha = 0.9;
-      for (const f of App.rayony.features) {
-        for (const ring of geomRings(f.geometry)) {
-          ctx.beginPath();
-          ring.forEach(([lng, lat], i) => {
-            const [x, y] = P([lat, lng]);
-            i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-          });
-          ctx.closePath(); ctx.stroke();
+      if (st.style.boundsOn) {
+        ctx.strokeStyle = BOUNDARY; ctx.lineJoin = "round";
+        ctx.lineWidth = 1.2 * s; ctx.globalAlpha = 0.9;
+        for (const f of App.rayony.features) {
+          for (const ring of geomRings(f.geometry)) {
+            ctx.beginPath();
+            ring.forEach(([lng, lat], i) => {
+              const [x, y] = P([lat, lng]);
+              i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+            });
+            ctx.closePath(); ctx.stroke();
+          }
         }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
       // граница выбранного района
       ctx.lineWidth = 3 * s;
       for (const ring of rings) {
@@ -764,7 +777,7 @@ const Ortho = (() => {
 
     // территория
     if (st.territory) {
-      ctx.strokeStyle = magenta(); ctx.lineWidth = 4 * s; ctx.lineJoin = "round";
+      ctx.strokeStyle = st.style.terrColor; ctx.lineWidth = st.style.terrW * s; ctx.lineJoin = "round";
       ctx.beginPath();
       st.territory.latlngs.forEach((ll, i) => {
         const [x, y] = P(ll);
@@ -900,6 +913,59 @@ const Ortho = (() => {
   }
 
   /* ================= UI ================= */
+  /* --- панель «Слои и стиль» --- */
+  (function styleControlsInit() {
+    const $ = id => document.getElementById(id);
+    const sync = () => {
+      $("st-rails").checked = st.style.railsOn;
+      $("st-bounds").checked = st.style.boundsOn;
+      $("st-mask").value = st.style.maskOp; $("st-mask-val").textContent = st.style.maskOp;
+      $("st-scale").value = st.style.lineScale; $("st-scale-val").textContent = st.style.lineScale;
+      $("st-road").value = st.style.roadColor;
+      $("st-terr").value = st.style.terrColor;
+      $("st-terr-w").value = st.style.terrW;
+    };
+    sync();
+    const saveStyle = () => { try { localStorage.setItem(STYLE_KEY, JSON.stringify(st.style)); } catch (e) {} };
+    $("st-rails").addEventListener("change", e => {
+      st.style.railsOn = e.target.checked; saveStyle();
+      if (inited) addOsmLayers();
+    });
+    $("st-bounds").addEventListener("change", e => {
+      st.style.boundsOn = e.target.checked; saveStyle();
+      if (inited) addAllBoundaries();
+    });
+    $("st-mask").addEventListener("input", e => {
+      st.style.maskOp = +e.target.value; $("st-mask-val").textContent = e.target.value; saveStyle();
+      if (st.maskLayer) st.maskLayer.setStyle({ fillOpacity: st.style.maskOp / 100 });
+    });
+    $("st-scale").addEventListener("input", e => {
+      st.style.lineScale = +e.target.value; $("st-scale-val").textContent = e.target.value; saveStyle();
+      if (inited) updateOsmWeights();
+    });
+    $("st-road").addEventListener("input", e => {
+      st.style.roadColor = e.target.value; saveStyle();
+      if (st.osmLayers) st.osmLayers.roads.forEach(r => r.layer.setStyle({ color: st.style.roadColor }));
+    });
+    $("st-terr").addEventListener("input", e => {
+      st.style.terrColor = e.target.value; saveStyle();
+      if (st.territory) st.territory.layer.setStyle({ color: st.style.terrColor });
+    });
+    $("st-terr-w").addEventListener("input", e => {
+      st.style.terrW = +e.target.value; saveStyle();
+      if (st.territory) st.territory.layer.setStyle({ weight: st.style.terrW });
+    });
+    $("st-reset").addEventListener("click", () => {
+      st.style = Object.assign({}, STYLE_DEFAULTS);
+      saveStyle(); sync();
+      if (!inited) return;
+      if (st.maskLayer) st.maskLayer.setStyle({ fillOpacity: st.style.maskOp / 100 });
+      addAllBoundaries();
+      addOsmLayers();
+      if (st.territory) st.territory.layer.setStyle({ color: st.style.terrColor, weight: st.style.terrW });
+    });
+  })();
+
   document.getElementById("basemap").addEventListener("change", e => setBasemap(e.target.value));
   document.getElementById("osm-roads").addEventListener("change", e => {
     if (!inited) return;

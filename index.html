@@ -40,18 +40,39 @@
         <label>Текст выноски (строка 2, жирным)</label>
         <input type="text" id="scheme-callout2">
       </div>
-      <p class="hint">Подписи, точку и выноску можно перетаскивать мышью прямо на схеме.</p>
-      <div class="field">
-        <label>Размер PNG</label>
-        <select id="scheme-scale">
-          <option value="1">1600 × 1131</option>
-          <option value="2" selected>3200 × 2263</option>
-          <option value="3">4800 × 3394</option>
-        </select>
+      <p class="hint">Подписи, точку и выноску можно перетаскивать мышью. Клик по подписи — редактирование.</p>
+      <div class="group">
+        <b>Подписи</b>
+        <button class="btn" id="scheme-add-label">Добавить подпись</button>
+        <div id="scheme-props" hidden>
+          <div class="field"><label>Текст</label><textarea id="slabel-text" rows="2"></textarea></div>
+          <div class="field"><label>Кегль <span id="slabel-size-val"></span></label>
+            <input type="range" id="slabel-size" min="8" max="48" step="1"></div>
+          <div class="field"><label>Поворот <span id="slabel-rot-val"></span>°</label>
+            <input type="range" id="slabel-rot" min="-90" max="90" step="1" value="0"></div>
+          <button class="btn danger" id="slabel-delete">Удалить подпись</button>
+        </div>
       </div>
-      <button class="btn primary" id="scheme-png">Скачать PNG</button>
-      <button class="btn" id="scheme-svg">Скачать SVG</button>
-      <button class="btn" id="scheme-reset">Сбросить подписи</button>
+      <div class="group">
+        <b>Экспорт</b>
+        <div class="field"><label>Формат листа</label>
+          <select id="scheme-page">
+            <option value="a4l">A4 альбомный</option>
+            <option value="a3l" selected>A3 альбомный</option>
+            <option value="mm">Свой размер (мм)</option>
+            <option value="px">Свой размер (px)</option>
+          </select></div>
+        <div class="field" id="scheme-custom" hidden>
+          <label>Ширина × высота</label>
+          <div class="wh-row"><input type="number" id="scheme-w" value="420"><input type="number" id="scheme-h" value="297"></div>
+        </div>
+        <div class="field"><label>Разрешение (DPI, для форматов в мм)</label>
+          <select id="scheme-dpi"><option>150</option><option selected>300</option><option>450</option></select></div>
+        <button class="btn primary" id="scheme-png">Скачать PNG</button>
+        <button class="btn primary" id="scheme-pdf">Скачать PDF</button>
+        <button class="btn" id="scheme-svg">Скачать SVG</button>
+        <button class="btn" id="scheme-reset">Сбросить подписи</button>
+      </div>
     </aside>
     <div class="workspace" id="scheme-workspace">
       <svg id="scheme-svg-root" viewBox="0 0 1600 1131" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -110,8 +131,24 @@
       </div>
       <div class="group">
         <b>Экспорт</b>
-        <div class="field">
-          <label>Детализация</label>
+        <div class="field"><label>Формат листа</label>
+          <select id="ortho-page">
+            <option value="view" selected>Текущий вид</option>
+            <option value="a4l">A4 альбомный</option>
+            <option value="a4p">A4 книжный</option>
+            <option value="a3l">A3 альбомный</option>
+            <option value="a3p">A3 книжный</option>
+            <option value="mm">Свой размер (мм)</option>
+            <option value="px">Свой размер (px)</option>
+          </select></div>
+        <div class="field" id="ortho-custom" hidden>
+          <label>Ширина × высота</label>
+          <div class="wh-row"><input type="number" id="ortho-w" value="420"><input type="number" id="ortho-h" value="297"></div>
+        </div>
+        <div class="field"><label>Разрешение (DPI, для форматов в мм)</label>
+          <select id="ortho-dpi"><option>150</option><option selected>220</option><option>300</option></select></div>
+        <div class="field" id="ortho-scale-field">
+          <label>Детализация (для «Текущий вид»)</label>
           <select id="ortho-scale">
             <option value="1">1× (как на экране)</option>
             <option value="2" selected>2×</option>
@@ -119,6 +156,7 @@
           </select>
         </div>
         <button class="btn primary" id="ortho-png">Скачать PNG</button>
+        <button class="btn primary" id="ortho-pdf">Скачать PDF</button>
       </div>
       <p class="hint">Подложка: Esri World Imagery. Подписи перетаскиваются мышью; клик по подписи — редактирование.</p>
     </aside>

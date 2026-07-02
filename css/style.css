@@ -69,6 +69,8 @@ main { flex: 1 1 auto; min-height: 0; }
 label.check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
 .group select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 8px; }
 .field input[type=color] { width: 48px; height: 30px; padding: 2px; border: 1px solid var(--ui-border); border-radius: 6px; }
+.wh-row { display: flex; gap: 6px; }
+.wh-row input { width: 100%; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 8px; }
 
 .workspace { flex: 1 1 auto; position: relative; min-width: 0; overflow: hidden; }
 #scheme-workspace { display: flex; align-items: center; justify-content: center; padding: 12px; }

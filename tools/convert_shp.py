@@ -148,16 +148,16 @@ feats = []
 for ao in aos:
     p = os.path.join(AO_DIR, ao, ao + ".shp")
     if os.path.exists(p):
-        for props, rings in shp_polygons(p, tol=25, need_props=False):
+        for props, rings in shp_polygons(p, tol=6, need_props=False):
             g = rings_to_geom(rings)
             feats.append({"type": "Feature", "properties": {"name": ao}, "geometry": g})
     else:
         # dissolve districts into an okrug boundary (e.g. ЮЗАО has no own shp)
         pr = os.path.join(AO_DIR, ao, ao + "_районы.shp")
         geoms = []
-        for props, rings in shp_polygons(pr, tol=25, need_props=False):
+        for props, rings in shp_polygons(pr, tol=6, need_props=False):
             geoms.append(sh_shape(rings_to_geom(rings)))
-        u = unary_union([g.buffer(0.0001) for g in geoms]).buffer(-0.0001).simplify(0.0002)
+        u = unary_union([g.buffer(0.0001) for g in geoms]).buffer(-0.0001).simplify(0.00006)
         feats.append({"type": "Feature", "properties": {"name": ao}, "geometry": sh_mapping(u)})
         print("dissolved okrug boundary for", ao)
 save("okruga.geojson", fc(feats))
@@ -168,28 +168,14 @@ for ao in aos:
     p = os.path.join(AO_DIR, ao, ao + "_районы.shp")
     if not os.path.exists(p):
         print("!! no rayony shp for", ao); continue
-    for props, rings in shp_polygons(p, tol=12):
+    for props, rings in shp_polygons(p, tol=2.5):
         layer = str(props.get("layer") or "")
         name = layer.split("_", 1)[1] if "_" in layer else layer
         g = rings_to_geom(rings)
         feats.append({"type": "Feature", "properties": {"ao": ao, "name": name}, "geometry": g})
 save("rayony.geojson", fc(feats))
 
-# 3) Станции (уже WGS84)
-feats = []
-for line, rel in [("МЦК", r"Московский транспорт\Метро\МЦК\МЦК_Станции.shp"),
-                  ("МЦД-2", r"Московский транспорт\Метро\МЦД-2\МЦД-2_Станции.shp")]:
-    with shapefile.Reader(os.path.join(ROOT, rel)) as r:
-        fields = [f[0] for f in r.fields[1:]]
-        for i in range(len(r)):
-            shp = r.shape(i)
-            rec = dict(zip(fields, list(r.record(i))))
-            name = rec.get("name") or rec.get("name_ru") or ""
-            x, y = shp.points[0]
-            feats.append({"type": "Feature",
-                          "properties": {"name": name, "line": line},
-                          "geometry": {"type": "Point", "coordinates": [round(x, 6), round(y, 6)]}})
-save("stations.geojson", fc(feats))
+# 3) Станции теперь собираются из OSM отдельным скриптом fetch_stations.py
 
 # sanity: САО bounds
 import itertools

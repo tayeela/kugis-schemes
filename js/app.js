@@ -163,6 +163,61 @@ function horizontalClearance(ring, x, y) {
   return null;
 }
 
+/* ---------- форматы листа и PDF ---------- */
+const PAGE_MM = { a4l: [297, 210], a4p: [210, 297], a3l: [420, 297], a3p: [297, 420] };
+
+function pageSpec(prefix) { // null => режим «текущий вид»
+  const sel = document.getElementById(prefix + "-page");
+  if (!sel || sel.value === "view") return null;
+  const v = sel.value;
+  const dpi = +document.getElementById(prefix + "-dpi").value || 300;
+  let wmm, hmm, wpx, hpx;
+  if (PAGE_MM[v]) {
+    [wmm, hmm] = PAGE_MM[v];
+  } else {
+    const w = +document.getElementById(prefix + "-w").value || 297;
+    const h = +document.getElementById(prefix + "-h").value || 210;
+    if (v === "mm") { wmm = w; hmm = h; }
+    else { wpx = w; hpx = h; wmm = w / dpi * 25.4; hmm = h / dpi * 25.4; }
+  }
+  if (!wpx) { wpx = Math.round(wmm / 25.4 * dpi); hpx = Math.round(hmm / 25.4 * dpi); }
+  return { wpx, hpx, wmm, hmm };
+}
+
+function initPageControls(prefix) {
+  const sel = document.getElementById(prefix + "-page");
+  const custom = document.getElementById(prefix + "-custom");
+  if (sel && custom)
+    sel.addEventListener("change", () =>
+      custom.hidden = !(sel.value === "mm" || sel.value === "px"));
+}
+initPageControls("scheme");
+initPageControls("ortho");
+
+let _jspdf = null;
+function loadJsPDF() {
+  if (window.jspdf) return Promise.resolve();
+  if (_jspdf) return _jspdf;
+  _jspdf = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js";
+    s.onload = res;
+    s.onerror = () => { _jspdf = null; rej(new Error("jsPDF не загрузился — проверьте интернет")); };
+    document.head.appendChild(s);
+  });
+  return _jspdf;
+}
+
+function downloadPDF(canvas, wmm, hmm, name, jpeg) {
+  const doc = new jspdf.jsPDF({
+    orientation: wmm >= hmm ? "landscape" : "portrait",
+    unit: "mm", format: [wmm, hmm],
+  });
+  doc.addImage(canvas.toDataURL(jpeg ? "image/jpeg" : "image/png", 0.95),
+    jpeg ? "JPEG" : "PNG", 0, 0, wmm, hmm);
+  doc.save(name);
+}
+
 function toast(msg, ms = 2600) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.hidden = false;

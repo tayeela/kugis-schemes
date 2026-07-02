@@ -224,7 +224,9 @@ const Ortho = (() => {
     osmStatus("Загрузка дорог из OSM…");
     const rings = geomOuterRings(App.district.feature.geometry);
     const [x0, y0, x1, y1] = ringsBBox(rings);
-    const px = (x1 - x0) * 0.15, py = (y1 - y0) * 0.15;
+    // буфер: ~40% рамки района, но не меньше ~2 км и не больше ~5 км
+    const px = Math.min(Math.max((x1 - x0) * 0.4, 0.032), 0.08);
+    const py = Math.min(Math.max((y1 - y0) * 0.4, 0.018), 0.045);
     const bbox = `${(y0 - py).toFixed(5)},${(x0 - px).toFixed(5)},${(y1 + py).toFixed(5)},${(x1 + px).toFixed(5)}`;
     const q = `[out:json][timeout:90];(
       way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian)$"](${bbox});
@@ -240,15 +242,16 @@ const Ortho = (() => {
       } catch (e) { err = e; }
     }
     if (!data) { osmStatus("Не удалось загрузить OSM: " + (err && err.message)); return; }
-    const roadsByClass = {}, rails = [];
+    const roadsByClass = {}, railsRaw = [];
     for (const el of data.elements || []) {
       if (!el.geometry) continue;
       const line = el.geometry.map(p => [p.lat, p.lon]);
       const hw = el.tags && el.tags.highway;
       if (hw && ROAD_W[hw]) (roadsByClass[hw] = roadsByClass[hw] || []).push(line);
-      else if (el.tags && el.tags.railway === "rail") rails.push(line);
+      else if (el.tags && el.tags.railway === "rail")
+        railsRaw.push({ line, usage: (el.tags.usage || "").trim() });
     }
-    st.osm = { roadsByClass, rails };
+    st.osm = { roadsByClass, rails: generalizeRails(railsRaw) };
     osmCache[key] = st.osm;
     if (document.getElementById("osm-roads").checked) addOsmLayers();
     osmStatus(osmSummary());
@@ -257,6 +260,54 @@ const Ortho = (() => {
     if (!st.osm) return "";
     const nr = Object.values(st.osm.roadsByClass).reduce((p, c) => p + c.length, 0);
     return `OSM: дорог ${nr}, линий ЖД ${st.osm.rails.length}`;
+  }
+
+  /* Генерализация ЖД: только магистральные ходы, параллельные пути сливаются в один */
+  function generalizeRails(items) {
+    if (!items.length) return [];
+    let arr = items;
+    if (items.some(r => r.usage === "main" || r.usage === "branch"))
+      arr = items.filter(r => r.usage === "main" || r.usage === "branch");
+    const M = 111320;
+    const lineLen = line => {
+      let s = 0;
+      for (let i = 1; i < line.length; i++) {
+        const kx = Math.cos(line[i][0] * Math.PI / 180) * M;
+        s += Math.hypot((line[i][1] - line[i - 1][1]) * kx, (line[i][0] - line[i - 1][0]) * M);
+      }
+      return s;
+    };
+    const ptSegDist = (p, a, b) => {
+      const kx = Math.cos(p[0] * Math.PI / 180) * M;
+      const px = p[1] * kx, py = p[0] * M;
+      let ax = a[1] * kx, ay = a[0] * M, bx = b[1] * kx, by = b[0] * M;
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    };
+    const ptLineDist = (p, line) => {
+      let d = Infinity;
+      for (let i = 1; i < line.length; i++) d = Math.min(d, ptSegDist(p, line[i - 1], line[i]));
+      return d;
+    };
+    const sample = (line, n) => {
+      const out = [];
+      for (let i = 0; i < n; i++) out.push(line[Math.round(i * (line.length - 1) / (n - 1))]);
+      return out;
+    };
+    arr = [...arr].sort((a, b) => lineLen(b.line) - lineLen(a.line));
+    const kept = [];
+    for (const r of arr) {
+      const pts = sample(r.line, Math.min(7, r.line.length));
+      let dup = false;
+      for (const k of kept) {
+        const ds = pts.map(p => ptLineDist(p, k.line)).sort((x, y) => x - y);
+        if (ds[Math.floor(ds.length / 2)] < 35) { dup = true; break; } // медиана < 35 м — тот же ход
+      }
+      if (!dup) kept.push(r);
+    }
+    return kept.map(r => r.line);
   }
 
   function addOsmLayers() {
@@ -600,20 +651,35 @@ const Ortho = (() => {
     });
   }
 
-  async function exportPNG() {
+  async function renderExport() {
     ensureMap();
     await document.fonts.ready;
     const bm = BASEMAPS[curBase];
     const ell = bm.crs === "3395";
-    const dz = { "1": 0, "2": 1, "3": 2 }[document.getElementById("ortho-scale").value];
+    const spec = pageSpec("ortho"); // null => «текущий вид»
     const z = Math.round(map.getZoom());
-    const zE = Math.min(z + dz, bm.maxNativeZoom);
-    const s = Math.pow(2, zE - z);
     const b = map.getBounds();
-    const [x0, y0] = projPx(b.getNorth(), b.getWest(), zE, ell);
-    const [x1, y1] = projPx(b.getSouth(), b.getEast(), zE, ell);
+    let [x0, y0] = projPx(b.getNorth(), b.getWest(), z, ell);
+    let [x1, y1] = projPx(b.getSouth(), b.getEast(), z, ell);
+    let zE;
+    if (!spec) {
+      const dz = { "1": 0, "2": 1, "3": 2 }[document.getElementById("ortho-scale").value];
+      zE = Math.min(z + dz, bm.maxNativeZoom);
+    } else {
+      // расширяем рамку до пропорций листа (симметрично от текущего вида)
+      const aspect = spec.wpx / spec.hpx;
+      const cw = x1 - x0, ch = y1 - y0;
+      if (cw / ch < aspect) { const add = (ch * aspect - cw) / 2; x0 -= add; x1 += add; }
+      else { const add = (cw / aspect - ch) / 2; y0 -= add; y1 += add; }
+      // зум под целевое разрешение листа
+      const need = Math.max(0, Math.ceil(Math.log2(spec.wpx / (x1 - x0))));
+      zE = Math.min(z + need, bm.maxNativeZoom);
+      while (zE > z - 4 && (x1 - x0) * (y1 - y0) * Math.pow(4, zE - z) > 64e6) zE--;
+    }
+    const s = Math.pow(2, zE - z);
+    x0 *= s; y0 *= s; x1 *= s; y1 *= s;
     const W = Math.round(x1 - x0), H = Math.round(y1 - y0);
-    if (W * H > 64e6) { toast("Слишком большой экспорт — уменьшите детализацию или окно"); return; }
+    if (W * H > 64e6) throw new Error("слишком большой экспорт — уменьшите формат или окно");
 
     // предзагрузка иконок метро
     const iconNames = new Set();
@@ -770,13 +836,36 @@ const Ortho = (() => {
     ctx.strokeText(attr, W - 8 * s, H - 6 * s);
     ctx.fillStyle = "#333"; ctx.fillText(attr, W - 8 * s, H - 6 * s);
 
+    // подгонка под лист
+    let out = canvas;
+    if (spec) {
+      out = document.createElement("canvas");
+      out.width = spec.wpx; out.height = spec.hpx;
+      out.getContext("2d").drawImage(canvas, 0, 0, spec.wpx, spec.hpx);
+    }
+    return { canvas: out, spec };
+  }
+
+  function exportName(ext) {
+    return "Ортофотоплан — " + (App.district ? App.district.display : "территория") + "." + ext;
+  }
+  async function exportPNG() {
+    const { canvas } = await renderExport();
     canvas.toBlob(blob => {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "Ортофотоплан — " + (App.district ? App.district.display : "территория") + ".png";
+      a.download = exportName("png");
       a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       toast("Готово");
     }, "image/png");
+  }
+  async function exportPDF() {
+    await loadJsPDF();
+    const { canvas, spec } = await renderExport();
+    const wmm = spec ? spec.wmm : canvas.width / 300 * 25.4;
+    const hmm = spec ? spec.hmm : canvas.height / 300 * 25.4;
+    downloadPDF(canvas, wmm, hmm, exportName("pdf"), true);
+    toast("Готово");
   }
 
   function drawAnnOnCanvas(ctx, a, P, s, icons) {
@@ -892,6 +981,8 @@ const Ortho = (() => {
   document.getElementById("add-stations").addEventListener("click", addStationsInView);
   document.getElementById("ortho-png").addEventListener("click", () =>
     exportPNG().catch(e => toast("Ошибка экспорта: " + e.message, 6000)));
+  document.getElementById("ortho-pdf").addEventListener("click", () =>
+    exportPDF().catch(e => toast("Ошибка экспорта PDF: " + e.message, 6000)));
 
   function addAtCenter(type) {
     ensureMap();

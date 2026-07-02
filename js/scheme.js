@@ -125,7 +125,7 @@ const Scheme = (() => {
     // кэш путей (данные тяжёлые — пересчитываем только при смене района)
     st.paths = {
       aoL: App.okruga.features.map(f => ({ name: f.properties.name, d: ringsPath(f.geometry, st.projL) })),
-      rayL: App.rayony.features.map(f => ringsPath(f.geometry, st.projL)),
+      rayL: App.rayony.features.map(f => ({ ao: f.properties.ao, d: ringsPath(f.geometry, st.projL) })),
       rayR: App.rayony.features.map(f => ({
         ao: f.properties.ao, name: f.properties.name, d: ringsPath(f.geometry, st.projR),
       })),
@@ -201,8 +201,11 @@ const Scheme = (() => {
     const gL = el("g", {}, svg);
     for (const p of st.paths.aoL.filter(x => x.name === d.ao))
       el("path", { d: p.d, fill: "var(--pink-fill)", stroke: "none", "fill-rule": "evenodd" }, gL);
-    for (const p of st.paths.rayL)
-      el("path", { d: p, fill: "none", stroke: "#999", "stroke-width": 0.6 }, gL);
+    for (const p of st.paths.rayL.filter(x => x.ao !== d.ao))
+      el("path", { d: p.d, fill: "none", stroke: "#999", "stroke-width": 0.6 }, gL);
+    // районы выделенного округа — цветом обводки округа, но тоньше
+    for (const p of st.paths.rayL.filter(x => x.ao === d.ao))
+      el("path", { d: p.d, fill: "none", stroke: "var(--pink-stroke)", "stroke-width": 0.9 }, gL);
     for (const p of st.paths.aoL)
       el("path", { d: p.d, fill: "none", stroke: "#1a1a1a", "stroke-width": 1.6, "stroke-linejoin": "round" }, gL);
     for (const p of st.paths.aoL.filter(x => x.name === d.ao))
@@ -407,7 +410,8 @@ const Scheme = (() => {
     for (const p of st.paths.aoL.filter(x => x.name === d.ao)) {
       ctx.fillStyle = PINK; ctx.fill(P2(p.d), "evenodd");
     }
-    for (const p of st.paths.rayL) stroke(P2(p), "#999", 0.6);
+    for (const p of st.paths.rayL.filter(x => x.ao !== d.ao)) stroke(P2(p.d), "#999", 0.6);
+    for (const p of st.paths.rayL.filter(x => x.ao === d.ao)) stroke(P2(p.d), PSTROKE, 0.9);
     for (const p of st.paths.aoL) stroke(P2(p.d), "#1a1a1a", 1.6);
     for (const p of st.paths.aoL.filter(x => x.name === d.ao)) stroke(P2(p.d), PSTROKE, 3);
 

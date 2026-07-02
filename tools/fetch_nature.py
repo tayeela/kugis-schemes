@@ -26,7 +26,8 @@ TAGS = {
 }
 
 def q_for(tags, bb):
-    body = "".join(f'way[{t}]({bb});relation[{t}]({bb});' for t in tags)
+    bbs = ",".join(str(round(v, 4)) for v in bb)   # s,w,n,e без скобок и пробелов
+    body = "".join(f'way[{t}]({bbs});relation[{t}]({bbs});' for t in tags)
     return f"[out:json][timeout:300][maxsize:1073741824];({body});out geom;"
 
 def overpass(query):

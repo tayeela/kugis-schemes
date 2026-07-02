@@ -97,7 +97,34 @@ const Ortho = (() => {
     }
     if (document.getElementById("osm-roads").checked) loadOSM();
   }
-  function onShow() { ensureMap(); setTimeout(() => map.invalidateSize(), 50); }
+  function onShow() {
+    ensureMap();
+    setTimeout(() => { map.invalidateSize(); updatePageFrame(); }, 60);
+  }
+
+  /* рамка выбранного листа поверх карты: центрированный кроп текущего вида */
+  function updatePageFrame() {
+    const el = document.getElementById("page-frame");
+    const spec = pageSpec("ortho");
+    if (!spec || !inited) { el.hidden = true; return; }
+    const c = document.getElementById("map");
+    const W = c.clientWidth, H = c.clientHeight;
+    if (!W || !H) { el.hidden = true; return; }
+    const aspect = spec.wpx / spec.hpx;
+    let w = W, h = W / aspect;
+    if (h > H) { h = H; w = H * aspect; }
+    el.style.width = Math.round(w) + "px";
+    el.style.height = Math.round(h) + "px";
+    el.style.left = Math.round((W - w) / 2) + "px";
+    el.style.top = Math.round((H - h) / 2) + "px";
+    const names = { a4l: "A4 альбомный", a4p: "A4 книжный", a3l: "A3 альбомный", a3p: "A3 книжный" };
+    el.dataset.label = names[document.getElementById("ortho-page").value] ||
+      `${Math.round(spec.wmm)}×${Math.round(spec.hmm)} мм`;
+    el.hidden = false;
+  }
+  ["ortho-page", "ortho-dpi", "ortho-w", "ortho-h"].forEach(id =>
+    document.getElementById(id).addEventListener("input", updatePageFrame));
+  window.addEventListener("resize", updatePageFrame);
 
   function setBasemap(id) {
     if (!inited) { curBase = id; return; }
@@ -602,11 +629,11 @@ const Ortho = (() => {
       const dz = { "1": 0, "2": 1, "3": 2 }[document.getElementById("ortho-scale").value];
       zE = Math.min(z + dz, bm.maxNativeZoom);
     } else {
-      // расширяем рамку до пропорций листа (симметрично от текущего вида)
+      // кропим текущий вид до пропорций листа — ровно то, что показывает рамка на экране
       const aspect = spec.wpx / spec.hpx;
       const cw = x1 - x0, ch = y1 - y0;
-      if (cw / ch < aspect) { const add = (ch * aspect - cw) / 2; x0 -= add; x1 += add; }
-      else { const add = (cw / aspect - ch) / 2; y0 -= add; y1 += add; }
+      if (cw / ch > aspect) { const cut = (cw - ch * aspect) / 2; x0 += cut; x1 -= cut; }
+      else { const cut = (ch - cw / aspect) / 2; y0 += cut; y1 -= cut; }
       // зум под целевое разрешение листа
       const need = Math.max(0, Math.ceil(Math.log2(spec.wpx / (x1 - x0))));
       zE = Math.min(z + need, bm.maxNativeZoom);
@@ -799,13 +826,11 @@ const Ortho = (() => {
 
     if (a.type === "street") {
       ctx.font = `600 ${size}px ${App.FONT}`;
-      drawHaloLines(ctx, a.text, size, "#1a1a1a", "#fff", size * 0.3);
+      drawHaloLines(ctx, a.text, size, "#1a1a1a", "#fff", size * 0.15);
     } else if (a.type === "district") {
       ctx.font = `700 ${size}px ${App.FONT}`;
       try { ctx.letterSpacing = (size * 0.14) + "px"; } catch (e) {}
-      ctx.shadowColor = "rgba(0,0,0,.85)"; ctx.shadowBlur = 4 * s;
-      drawHaloLines(ctx, a.text.toUpperCase(), size, "#fff", "rgba(0,0,0,.75)", size * 0.16);
-      ctx.shadowBlur = 0;
+      drawHaloLines(ctx, a.text.toUpperCase(), size, "#fff", "#333", size * 0.13);
       try { ctx.letterSpacing = "0px"; } catch (e) {}
     } else if (a.type === "callout") {
       ctx.font = `600 ${size}px ${App.FONT}`;
@@ -847,7 +872,7 @@ const Ortho = (() => {
       }
       const nameY = size * 0.75;
       ctx.font = `700 ${size}px ${App.FONT}`;
-      ctx.lineWidth = size * 0.28; ctx.strokeStyle = "#fff"; ctx.lineJoin = "round";
+      ctx.lineWidth = size * 0.15; ctx.strokeStyle = "#fff"; ctx.lineJoin = "round";
       ctx.strokeText(a.text, 0, nameY);
       ctx.fillStyle = "#d6083b";
       ctx.fillText(a.text, 0, nameY);
